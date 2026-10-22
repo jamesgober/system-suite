@@ -20,17 +20,18 @@
 //! The Tier 1 entry points arrive from `0.3.0` on:
 //!
 //! ```text
-//! let system = system_suite::start("site")?;   // boots every member in order; returns when ready
-//! system.log().info("ready");                  // typed handles, no lookups by name
-//! system.run()                                 // parks until a stop signal, then shuts down in order
+//! let system = system_suite::start!()?;                 // boots every member in order; returns when ready
+//! system_suite::log::info!(system.log(), "ready");      // typed handles, no lookups by name
+//! system.run()                                          // parks until a stop signal, then shuts down in order
 //! ```
 //!
 //! ## Status
 //!
-//! Scaffold. The design is written down in `dev/PLAN.md` and the milestone
-//! schedule in `dev/ROADMAP.md` (both in the
-//! [repository](https://github.com/jamesgober/system-suite)); the public API
-//! is locked in `0.2.0` and the first boot path ships in `0.3.0`.
+//! Scaffold. The public API is written in `docs/API.md` and the boot and
+//! shutdown orders in `docs/BOOT-ORDER.md`; the design is in `dev/PLAN.md`
+//! and the milestone schedule in `dev/ROADMAP.md` (all in the
+//! [repository](https://github.com/jamesgober/system-suite)). The first
+//! boot path ships in `0.3.0`.
 
 #![doc(html_root_url = "https://docs.rs/system-suite")]
 #![cfg_attr(docsrs, feature(doc_cfg))]

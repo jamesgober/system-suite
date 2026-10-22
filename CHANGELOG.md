@@ -11,6 +11,32 @@
 
 ## [Unreleased]
 
+The design lock. No functional code yet.
+
+### Added
+
+- `docs/API.md`: the complete public API (items SUI-01 to SUI-30) with
+  signatures, errors, exit codes, costs, examples, and the version each item
+  arrives in: `start!`, `System`, `Builder`, `Boot`, `Foundation`, `Error`
+  and `ErrorKind`, the `kernel` module (lifecycle, urgent line, subsystems,
+  workers, timers, health, events), the configuration view, `AuditLog`,
+  `Snapshot`, and the member modules.
+- `docs/BOOT-ORDER.md`: the boot and shutdown orders with the reason for
+  every position, the deadlines, reload, and crash handling.
+
+### Changed
+
+- The Tier 1 entry point is the macro `start!()`, so the application's build
+  info is recorded (`dev/PLAN.md`, D-008).
+- The boot order reads paths, the environment, and the configuration before
+  the process guard, and takes the guard before anything is created or any
+  thread starts (D-012).
+- `dev/PLAN.md`: member facts corrected after reading every member's public
+  API, member requests filed, open decisions OD-4 to OD-6 decided and OD-1 to
+  OD-3 put to James, decisions D-008 to D-031, a new defence idea.
+- `dev/ROADMAP.md`: member releases recorded as blockers for 0.3, 0.4, and
+  0.5; secret-reference resolution moved to 0.5 with key-vault (D-031).
+
 ---
 
 ## [0.1.0] - 2026-10-22

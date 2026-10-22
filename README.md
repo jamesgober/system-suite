@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: scaffold (<code>0.1.0</code>).</strong> No functional code yet. The design is written down in <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a> and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>; the public API is locked in <code>0.2.0</code> and the first boot path ships in <code>0.3.0</code>.
+        <strong>Status: scaffold (<code>0.1.0</code>), design lock in review.</strong> No functional code yet. The public API is written in <a href="./docs/API.md"><code>docs/API.md</code></a> and the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>; the design is in <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a> and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The first boot path ships in <code>0.3.0</code>.
     </blockquote>
 </div>
 
@@ -42,11 +42,11 @@ The shape of the Tier 1 API, arriving from `0.3.0`:
 
 ```rust
 fn main() -> std::process::ExitCode {
-    let system = match system_suite::start("site") {   // boots every enabled part, in order
+    let system = match system_suite::start!() {        // boots every enabled part, in order
         Ok(system) => system,
-        Err(error) => return error.exit_code(),       // names the failing step and what to do
+        Err(error) => return error.report(),          // names the failing step and what to do
     };
-    system.log().info("ready");
+    system_suite::log::info!(system.log(), "ready");
     system.run()                                       // parks until a stop signal, then shuts down in order
 }
 ```
@@ -56,7 +56,7 @@ fn main() -> std::process::ExitCode {
 | System facts, build info, instance info, process guard | sys-lib | `sys` (default) |
 | Application and OS directories | path-lib | `paths` (default) |
 | Environment variables, `.env` files | env-lib | `env` (default) |
-| Configuration | to be decided at the design lock | `config` (default) |
+| Configuration | config-lib or noml-core (open decision OD-2) | `config` (default) |
 | Logging | log-io | `log` (default) |
 | Metrics | metrics-lib | `metrics` (default) |
 | Signals | signal-mod | `signals` (default) |
