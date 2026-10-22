@@ -1,0 +1,38 @@
+<h1 align="center">
+    <img width="90px" height="auto" src="https://raw.githubusercontent.com/jamesgober/jamesgober/main/media/icons/hexagon-3.svg" alt="Triple Hexagon">
+    <br><b>CHANGELOG</b>
+</h1>
+<p>
+  All notable changes to <code>system-suite</code> will be documented in this file. The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
+  and this project adheres to <a href="https://semver.org/spec/v2.0.0.html/">Semantic Versioning</a>.
+</p>
+
+---
+
+## [Unreleased]
+
+---
+
+## [0.1.0] - 2026-10-22
+
+The scaffold and the plan. No functional code yet.
+
+### Added
+
+- Crate manifest (edition 2024, MSRV 1.89, no dependencies; one feature per
+  member, declared empty until each member is wired), `Apache-2.0 OR MIT`
+  license, README, REPS, `deny.toml`, `clippy.toml`, `rustfmt.toml`,
+  `.editorconfig`, `.gitattributes`.
+- `VERSION` constant and the crate-root lint set: `unsafe_code` forbidden,
+  `missing_docs`, and `unwrap`/`expect`/`panic` in library code denied.
+- CI on Linux, macOS, and Windows, each on x86_64 and aarch64, on stable and
+  1.89; documentation built with default and all features; `cargo package`;
+  `cargo audit` and `cargo deny`.
+- `dev/PLAN.md` (purpose, scope, members and their status, requirements, the
+  kernel, the boot and shutdown orders, API outline with item ids, threats T1
+  to T9, architecture, dependencies, performance targets, testing, open
+  decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
+  `dev/ROADMAP.md`.
+
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jamesgober/system-suite/releases/tag/v0.1.0

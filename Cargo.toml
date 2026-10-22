@@ -1,0 +1,127 @@
+# =============================================================================
+#  R E P S   ·   system-suite
+# =============================================================================
+[package]
+name    = "system-suite"
+version = "0.1.0"
+
+# Minimum Supported Rust Version (MSRV)
+# 1.89: the highest MSRV among the members (sys-lib needs `File::lock` and
+# `File::try_lock`, stable from 1.89.0). See dev/PLAN.md, D-004.
+rust-version = "1.89"
+edition = "2024"
+
+# License
+license = "Apache-2.0 OR MIT"
+
+# Readme
+readme = "README.md"
+
+# Description
+description = "The foundation package for Rust services: system facts, paths, environment, configuration, logging, metrics, audit, registry, signals, and a kernel that starts and stops them in order. One dependency, one start call."
+
+# Keywords (5 max)
+keywords = ["foundation", "service", "lifecycle", "kernel", "bootstrap"]
+
+# Categories
+categories = ["config", "development-tools", "os"]
+
+# Links
+homepage      = "https://github.com/jamesgober/system-suite"
+repository    = "https://github.com/jamesgober/system-suite"
+documentation = "https://docs.rs/system-suite"
+
+# Authors
+authors = ["James Gober <me@jamesgober.com>"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "system_suite"
+path = "src/lib.rs"
+
+
+# FEATURE FLAGS
+# #################################
+# Every member is behind its own feature, so a project compiles only what it
+# uses. The features are declared now and stay empty until each member is
+# wired, by published version, with the first code that needs it
+# (dev/PLAN.md section 4 lists each member, its version, and its blockers).
+[features]
+default = ["kernel", "sys", "paths", "env", "config", "log", "metrics", "signals", "time", "ids"]
+
+# Everything, including the opt-in members.
+full = [
+    "kernel", "sys", "paths", "env", "config", "log", "metrics", "signals", "time", "ids",
+    "audit", "registry", "globals", "rand", "secrets",
+]
+
+# The kernel: lifecycle, boot and shutdown order, urgent line, workers and
+# timers, health, readiness, crash capture.
+kernel = []
+
+# System facts and the boot kit: build info, instance info, process guard (sys-lib).
+sys = []
+
+# Application and OS directories (path-lib).
+paths = []
+
+# Environment variables and .env files (env-lib).
+env = []
+
+# Configuration (backend decided in dev/PLAN.md, OD-2).
+config = []
+
+# Structured logging (log-io).
+log = []
+
+# Metrics (metrics-lib).
+metrics = []
+
+# OS signals translated by the kernel (signal-mod).
+signals = []
+
+# Monotonic and wall-clock time, mockable (clock-lib).
+time = []
+
+# Request, instance, and entity ids (id-forge).
+ids = []
+
+# Tamper-evident audit records (audit-trail). Opt-in: see dev/PLAN.md, OD-3.
+audit = []
+
+# Event and callback registry (registry-io). Opt-in until the kernel needs it.
+registry = []
+
+# Process-wide globals (global-lib).
+globals = []
+
+# Randomness, including the OS CSPRNG (mod-rand).
+rand = []
+
+# Page-locked secret storage (key-vault). Opt-in: third-party dependencies.
+secrets = []
+
+
+# DEPENDENCIES
+# #################################
+[dependencies]
+# None yet. Each member is added by published version (never `path`) with
+# the first code that needs it; dev/PLAN.md section 4 is the list.
+
+
+# DEV DEPENDENCIES
+# #################################
+[dev-dependencies]
+
+
+# RELEASE PROFILE
+# #################################
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = "symbols"
