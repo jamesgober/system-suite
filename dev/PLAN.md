@@ -4,7 +4,7 @@
 >
 > **Read order:** [`../REPS.md`](../REPS.md), then [`DIRECTIVES.md`](./DIRECTIVES.md), then **this file**, then [`ROADMAP.md`](./ROADMAP.md).
 >
-> **Status:** `0.1.0` published. The `0.2.0` design lock is written ([`../docs/API.md`](../docs/API.md), [`../docs/BOOT-ORDER.md`](../docs/BOOT-ORDER.md)) and waits for James's approval and his answers to OD-1, OD-2, and OD-3.
+> **Status:** `0.1.0` published. The `0.2.0` design lock is written ([`../docs/API.md`](../docs/API.md), [`../docs/BOOT-ORDER.md`](../docs/BOOT-ORDER.md)); every open decision is answered. It waits for James's approval of `docs/API.md`.
 
 ---
 
@@ -122,18 +122,18 @@ Versions checked on crates.io on 2026-10-22; public APIs read from source at the
 | System facts, boot kit | `sys` | sys-lib | 0.1.0 (API locked in its own 0.2 design, awaiting James) | none | **blocker for 0.3**: needs sys-lib 0.3 (build info, instance info, guard, `Error`) |
 | Paths | `paths` | path-lib | 1.0.0 | none | ready; Windows owner-only directories requested for T3 (blocker for the 0.3 T3 test on Windows) |
 | Environment | `env` | env-lib | 1.0.0 | none (uses path-lib) | ready; the suite never calls `Env::export` (it is `unsafe`) |
-| Configuration | `config` | config-lib or noml-core | config-lib 1.1.0; noml-core 0.1.0 (an empty scaffold, no date for 0.2) | config-lib: thiserror, serde (unused), dashmap, arc-swap, notify (default feature); noml-core: none | **open decision OD-2** |
+| Configuration | `config` | config-lib (OD-2, D-034) | 1.1.0 | thiserror, serde (unused), dashmap, arc-swap; `notify` is off (the suite reloads by signal) | ready; [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) is a cleanup, not a blocker |
 | Logging | `log` | log-io | 2.0.0 | none | needs a recent-lines ring and a file mode option (requested; blocker for 0.3 crash capture) |
 | Metrics | `metrics` | metrics-lib | 2.0.0 | none with its integrations off | ready |
-| Signals | `signals` | signal-mod | 2.0.0 | **signal-hook, libc (Unix), windows-sys (Windows)** in its runtime-free back-end; tokio by default | **blocker for 0.3**: a dependency-free intake (D-014); Windows service control for 0.5 |
+| Signals | `signals` | signal-mod | 2.0.0 | signal-hook, libc (Unix), windows-sys (Windows), with `default-features = false, features = ["std", "agnostic"]` (no tokio) | ready (dependencies accepted, D-032); Windows service control for 0.5 |
 | Time | `time` | clock-lib | 1.1.0 (1.1.1 in progress) | none | ready |
 | Ids | `ids` | id-forge | 1.0.0 | none | ready; the suite calls only `try_next_id` (`next_id` panics on clock skew) |
-| Audit | `audit` | audit-trail | 1.0.1 | sha2 or blake3 (accepted cryptography exception) | needs resume-and-verify from a file, owner-only files, `sync`, a clock that never goes back (requested; blocker for 0.5); default or opt-in is OD-3 |
+| Audit | `audit` | audit-trail | 1.0.1 | sha2 (blake3 through `audit-blake3`) | opt-in (OD-3, D-035); needs resume-and-verify from a file, owner-only files, `sync`, a clock that never goes back (requested; blocker for 0.5) |
 | Registry | `registry` | registry-io | 1.1.0 | none | ready |
 | Globals | `globals` | global-lib | 1.0.0 | none | ready |
 | Randomness | `rand` | mod-rand | 1.0.0 (Apache-2.0 only) | none | ready |
 | Secrets | `secrets` | key-vault | 1.1.0 | subtle, getrandom, blake3, zeroize, arc-swap | ready; opt-in because of its dependencies |
-| Kernel | `kernel` | this crate (OD-1) | - | none | built here |
+| Kernel | `kernel` | this crate (OD-1, D-033) | - | none | built here |
 
 log-io and mod-rand are licensed Apache-2.0 only; the suite's own code stays `Apache-2.0 OR MIT`, and a binary that includes those members follows Apache-2.0 for them (both licences are on `deny.toml`'s allow list).
 
@@ -168,7 +168,7 @@ log-io and mod-rand are licensed Apache-2.0 only; the suite's own code stays `Ap
 
 | Id | Requirement |
 |---|---|
-| NFR-1 | Zero third-party runtime dependencies in the default feature set, except cryptography accepted through audit-trail if OD-3 makes audit a default. |
+| NFR-1 | Every third-party runtime dependency, default or optional, is a judged and recorded choice in the dependency register (section 12.4): who maintains it, how actively, its `unsafe` and soundness record, its transitive tree, its MSRV, and its licence. `cargo audit` and `cargo deny` gate it in CI. No async runtime (D-005). (Replaces the 0.1.0 zero-dependency rule, D-032.) |
 | NFR-2 | Zero CPU when idle: no polling threads, no timers firing for nothing. |
 | NFR-3 | Boot to ready with the default members and a local configuration file in under 5 ms [target, measured in 0.6]. |
 | NFR-4 | Stop request to exit with no work in flight in under 50 ms [target]. |
@@ -337,7 +337,7 @@ fn main() -> std::process::ExitCode {
 
 ## 9. Configuration
 
-- One file per application (`<name>.<ext>`, the extension set by the OD-2 backend), found by the order: explicit path, `<NAME>_CONFIG` environment variable, the application's configuration directory (path-lib), the working directory (only when not running privileged, D-020).
+- One file per application (`<name>.conf`, config-lib's `conf` format, D-034), found by the order: explicit path, `<NAME>_CONFIG` environment variable, the application's configuration directory (path-lib), the working directory (only when not running privileged, D-020).
 - The file's owner and permissions are checked before it is parsed (D-020).
 - One section per member (`[config]`, `[guard]`, `[log]`, `[crash]`, `[metrics]`, `[kernel]`, `[ids]`, `[audit]`, `[secrets]`), each optional with secure defaults; summary in `docs/API.md`, every key in `docs/CONFIGURATION.md` (0.5).
 - Secret values are references only (FR-16): `env:NAME`, `file:/path`, `vault:name` (D-025).
@@ -401,14 +401,14 @@ Filed on 2026-10-22, after reading every member's public API at the design lock.
 | Member | Need | Needed by | Request |
 |---|---|---|---|
 | sys-lib | 0.3 boot kit (build info, instance info, guard, `is_elevated`, `Error`) as the suite uses it; `GuardBuilder::keep_open_files()` for `process_wide(false)` | suite 0.3 | [sys-lib#2](https://github.com/jamesgober/sys-lib/issues/2) |
-| signal-mod | a runtime-free back-end with no third-party dependencies (today: signal-hook, libc, windows-sys) (D-014) | suite 0.3 | [signal-mod#3](https://github.com/jamesgober/signal-mod/issues/3) |
+| signal-mod | ~~a runtime-free back-end with no third-party dependencies~~: withdrawn, its dependencies are accepted (D-032) | - | [signal-mod#3](https://github.com/jamesgober/signal-mod/issues/3) (closed) |
 | signal-mod | Windows service control: stop, shutdown, preshutdown, paramchange, a user code for the dump, status reporting (D-014, answers OD-6) | suite 0.5 | [signal-mod#4](https://github.com/jamesgober/signal-mod/issues/4) |
 | log-io | a bounded recent-lines sink for crash reports (it has none) | suite 0.3 | [log-io#1](https://github.com/jamesgober/log-io/issues/1) |
 | log-io | a file mode option for `FileSink` and `RotatingFile` (T3) | suite 0.3 | [log-io#2](https://github.com/jamesgober/log-io/issues/2) |
 | path-lib | owner-only directories on Windows (T3) | suite 0.3 | [path-lib#1](https://github.com/jamesgober/path-lib/issues/1) |
-| config-lib | a build with no third-party runtime dependency (serde unused; thiserror, dashmap, arc-swap replaceable) | suite 0.4, if OD-2 picks config-lib | [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) |
+| config-lib | remove the unused `serde` and trim the rest where it is cheap; a cleanup, not a blocker (D-034) | when convenient | [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) |
 | audit-trail | resume a verified chain from a file, owner-only files, `sync`, a clock that never goes back | suite 0.5 | [audit-trail#3](https://github.com/jamesgober/audit-trail/issues/3) |
-| noml-core | a first published version (0.2, the static NOML/TOML tree) | suite 0.4, only if OD-2 picks noml-core | held until OD-2 is answered |
+| noml-core | none: OD-2 picked config-lib (D-034); NOML/TOML can come later through config-lib | - | not filed |
 
 signal-mod's coverage was confirmed from its 2.0.0 source (the 0.1.0 request "confirm it exposes the signals of section 6.4"): SIGTERM, SIGINT, SIGQUIT, SIGHUP, SIGUSR1 on Unix and Ctrl+C, Ctrl+Break, console close, logoff, and shutdown on Windows, all without a runtime; Windows service control and the dependency-free back-end are missing and requested above.
 
@@ -416,8 +416,31 @@ Observed and not requested (the suite works around them without copying code): i
 
 ### 12.3 Planned packages that plug in
 
-- **Error suite** (planned): the kernel exposes an error hook in `Registration`; when the error suite is published, a feature `errors` wires its service, and crash capture reports coded events.
+- **Error suite** (planned): the kernel exposes an error hook in `Link` (`Link::report_error`); when the error suite is published, a feature `errors` wires its service, and crash capture reports coded events.
 - **Security signals** (planned): the kernel exposes the shared threat state (urgent level `Lockdown`, revocation epochs); a feature `security` wires the bridge when published.
+
+### 12.4 Dependency register
+
+Every third-party crate the suite brings, and why it is acceptable (D-032). Reviewed 2026-10-22 on crates.io; each is re-checked when its version changes, and `cargo audit` and `cargo deny` run on every CI build.
+
+| Crate | Brought by | Feature | Maintainer and status | Why accepted | Watch |
+|---|---|---|---|---|---|
+| `libc` | signal-mod (Unix) | `signals` (default) | rust-lang; released monthly; among the most used crates | the standard Unix bindings; writing our own declarations adds risk, not safety | none |
+| `windows-sys` 0.61 | signal-mod (Windows) | `signals` (default) | Microsoft; generated from Windows metadata | the official Windows bindings; essential for console and service events | key-vault pins 0.59: two versions in a `full` build (cargo-deny warns) |
+| `signal-hook`, `signal-hook-registry` | signal-mod (Unix) | `signals` (default) | long-maintained (0.4.5, October 2026); used by most of the ecosystem's signal handling | async-signal-safe handler registration is subtle; this is the reviewed, widely tested implementation | none |
+| `thiserror` (+ `proc-macro2`, `quote`, `syn` at build time) | config-lib | `config` (default) | dtolnay; very widely used | derive only; no run-time code of its own | config-lib#4 may remove it |
+| `serde` (+ `serde_derive` at build time) | config-lib | `config` (default) | dtolnay | unused by config-lib's code; compile time only cost | config-lib#4 removes it |
+| `dashmap` 6 | config-lib | `config` (default) | maintained; 6.x has no open advisory (an old 5.0 soundness advisory was fixed in 5.1) | config-lib's path cache | brings `hashbrown`, `lock_api`, `parking_lot_core`, `crossbeam-utils` |
+| `arc-swap` | config-lib, key-vault | `config` (default), `secrets` | vorner (as signal-hook); maintained | lock-free pointer swap | none |
+| `sha2` (+ `digest`, `block-buffer`, `crypto-common`, `cpufeatures`, `cfg-if`) | audit-trail | `audit` | RustCrypto; audited, constant-time where it matters | the audit chain's hash; never written in-house | none |
+| `blake3` | audit-trail, key-vault | `audit-blake3`, `secrets` | the BLAKE3 authors | alternative audit hash; key-vault's normalisation | none |
+| `subtle`, `zeroize`, `getrandom` 0.2 | key-vault | `secrets` | dalek-cryptography, RustCrypto, rust-random | constant-time comparison, wiping, OS randomness for the vault | getrandom 0.2 is the older line |
+
+Not accepted: any async runtime (tokio, async-std) in any feature, including signal-mod's default `tokio` feature and metrics-lib's `async` (D-005); `notify` (config-lib's default `hot-reload`; the suite reloads by signal or call, so it would be an idle watcher thread for nothing).
+
+### 12.5 Member features passed through
+
+A member's optional features are reachable without depending on the member directly: the suite declares `<suite feature>-<member feature>` features that turn on the member's feature (D-036). The application can also add the member crate itself with the feature it wants; Cargo merges features of the same crate version, so the suite's re-exported module gets it too. Pass-through features are added with each member's wiring and listed in `docs/API.md`; every one is checked against the register before it is added.
 
 ---
 
@@ -468,9 +491,9 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 
 | Id | Question | Status | Recommendation or answer |
 |---|---|---|---|
-| OD-1 | Where does the kernel live: built here as a module, or service-kernel cleaned (no tokio, current first-party versions) and published as its own crate? | **escalated to James, 2026-10-22** | **Built here** (module `kernel`, feature `kernel`), from the design in sections 6 and 7; split into its own crate only when a second consumer needs the kernel without the suite (James's split rule). Reading service-kernel at the design lock strengthened this: its workers, shutdown, drain, and signals all need tokio and its messages all go through lang-lib, so "cleaning" it means rewriting its runtime half; its runtime-free shapes were adopted here instead. An earlier note leaned towards service-kernel; that was before its code was read. |
-| OD-2 | Configuration backend: noml-core (zero dependencies, unpublished) or config-lib 1.1 (eight formats, four third-party dependencies)? | **escalated to James, 2026-10-22** | Changed from the 0.1.0 recommendation after reading both: **config-lib**, once [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) removes its four dependencies (one is unused, the other three are small, private changes), with its built-in `conf` format (`[section]`, `key = value`) as the file format for now. noml-core is an empty scaffold whose 0.2 has no date and is scheduled by another project; NOML/TOML can be added later as a second format without changing the suite's API (D-018). The alternative (wait for noml-core) blocks suite 0.4 for an unknown time. |
-| OD-3 | Is audit a default member? audit-trail brings sha2 or blake3 (the accepted cryptography exception). | **escalated to James, 2026-10-22** | **Opt-in** (CLI tools and small services do not need it, and it is the only default that would bring a third-party crate); WASP and Hive DB enable it. Revisit at 0.8. The API is the same either way. |
+| OD-1 | Where does the kernel live: built here as a module, or service-kernel cleaned (no tokio, current first-party versions) and published as its own crate? | **decided by James, 2026-10-22 (D-033)** | **Built here** (module `kernel`, feature `kernel`), from the design in sections 6 and 7; split into its own crate only when a second consumer needs the kernel without the suite (James's split rule). Reading service-kernel at the design lock strengthened this: its workers, shutdown, drain, and signals all need tokio and its messages all go through lang-lib, so "cleaning" it means rewriting its runtime half; its runtime-free shapes were adopted here instead. An earlier note leaned towards service-kernel; that was before its code was read. |
+| OD-2 | Configuration backend: noml-core (zero dependencies, unpublished) or config-lib 1.1 (eight formats, four third-party dependencies)? | **decided by James, 2026-10-22 (D-034)** | **config-lib**, as published, with its built-in `conf` format (`[section]`, `key = value`). Its dependencies are accepted (section 12.4); [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) is a later cleanup. config-lib and the suite are updated together when config-lib grows (NOML/TOML through noml-core, for example); the suite's API does not change (D-018). |
+| OD-3 | Is audit a default member? audit-trail brings sha2 or blake3. | **decided by James, 2026-10-22 (D-035)** | **Opt-in.** Not because of sha2 (accepted, section 12.4) but because an audit chain is a file every run of a CLI tool or small service would create and verify for nothing; WASP and Hive DB enable it. Revisit at 0.8. |
 | OD-4 | Does the suite install the panic hook by default? | **decided (D-016)** | Yes, with `crash_capture(false)` to opt out, and no hook in `process_wide(false)` mode. |
 | OD-5 | Re-export names: `system_suite::log` shadows the `log` crate name in user code that imports both. | **decided (D-015)** | Keep `log` (and `rand`); document `use system_suite::log as slog;`. |
 | OD-6 | Windows service control (start, stop, pause from the service manager) | **decided (D-014)** | Through **signal-mod**, not sys-lib: sys-lib's charter is read-only system facts and its spec places signal handling in signal-mod; service control codes are signal-like events for the same coordinator. Requested as [signal-mod#4](https://github.com/jamesgober/signal-mod/issues/4); suite 0.5. |
@@ -521,3 +544,8 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 | D-029 | 2026-10-22 | Kernel deadlines and timers always use the OS monotonic clock; `Builder::clock` changes only what `Foundation::clock` returns | a test clock must never stall a shutdown |
 | D-030 | 2026-10-22 | systemd notification through a std Unix datagram socket: `READY=1`, `STATUS=`, `WATCHDOG=1` only while not `Unhealthy`, `STOPPING=1` at the start of shutdown | no FFI needed; a wedged process stops sending keep-alives and systemd restarts it |
 | D-031 | 2026-10-22 | Secret-reference resolution (FR-16) and its T2 tests move from 0.4 to 0.5; in 0.4 any reference is refused | resolution goes through key-vault (D-025), which the roadmap wires in 0.5; refusing is fail-closed, so nothing insecure ships in between |
+| D-032 | 2026-10-22 | James: the zero-third-party-dependency rule is replaced, for this project, by judgement. Each dependency is reviewed (maintainer, maintenance, `unsafe` and soundness record, transitive tree, MSRV, licence) and recorded in the dependency register (section 12.4); no async runtime stays (D-005). signal-mod's signal-hook, libc, and windows-sys are accepted, which withdraws the first half of D-014 (signal-mod#3 closed) and removes that 0.3 blocker | the members were built zero-dependency, but some dependencies are necessities (OS bindings, audited cryptography, async-signal-safe handling); a suite that shuts features off to follow a count serves no one |
+| D-033 | 2026-10-22 | OD-1 (James): the kernel is built here, as the `kernel` module | as recommended; a split into its own crate waits for a second consumer that needs the kernel without the suite |
+| D-034 | 2026-10-22 | OD-2 (James): config-lib is the configuration backend, as published, with the `conf` format; `hot-reload` (notify) off | config-lib was meant for this; its dependencies are accepted under D-032; config-lib and the suite are updated together later |
+| D-035 | 2026-10-22 | OD-3 (James): audit is opt-in; sha2 is the default hash, blake3 through `audit-blake3` | sha2 is not the concern (D-032); a chain file per run is, for tools and small services |
+| D-036 | 2026-10-22 | Member features are passed through as `<suite feature>-<member feature>` features (for example `metrics-http`, `log-tracing`, `config-json`), each checked against the dependency register; no pass-through brings an async runtime | a project gets a member's optional feature without a second dependency line; adding the member directly still works through Cargo's feature merging |

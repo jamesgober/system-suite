@@ -33,9 +33,18 @@ The design lock. No functional code yet.
   thread starts (D-012).
 - `dev/PLAN.md`: member facts corrected after reading every member's public
   API, member requests filed, open decisions OD-4 to OD-6 decided and OD-1 to
-  OD-3 put to James, decisions D-008 to D-031, a new defence idea.
-- `dev/ROADMAP.md`: member releases recorded as blockers for 0.3, 0.4, and
-  0.5; secret-reference resolution moved to 0.5 with key-vault (D-031).
+  OD-3 answered by James (the kernel is built here, config-lib is the
+  configuration backend, audit is opt-in), decisions D-008 to D-036, a new
+  defence idea.
+- Dependency policy: the zero-third-party-dependency rule is replaced by a
+  reviewed dependency register (`dev/PLAN.md` section 12.4, D-032);
+  signal-mod's signal-hook, libc, and windows-sys, config-lib's
+  dependencies, and audit-trail's sha2 are accepted. No async runtime, as
+  before.
+- `docs/API.md`: member features passed through as
+  `<suite feature>-<member feature>` features (D-036).
+- `dev/ROADMAP.md`: member releases recorded as blockers for 0.3 and 0.5;
+  secret-reference resolution moved to 0.5 with key-vault (D-031).
 
 ---
 

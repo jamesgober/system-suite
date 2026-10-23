@@ -19,8 +19,8 @@ Exit: CI green on every job; the crate published to claim the name.
 Exit: James approves `docs/API.md`; every open decision answered.
 - [x] `docs/API.md` written for every item in `PLAN.md` section 8 (signatures, errors, examples), each marked with the version it arrives in (2026-10-22; item ids SUI-01 to SUI-30).
 - [x] `docs/BOOT-ORDER.md` first version: both orders with the reason for every position (2026-10-22; the boot order was revised, D-012).
-- [ ] Open decisions OD-1 to OD-6 answered by James or accepted as recommended, each recorded in the decision log. OD-4 (D-016), OD-5 (D-015), and OD-6 (D-014) decided; **OD-1, OD-2, OD-3 escalated to James on 2026-10-22**.
-- [x] Member requests filed in their repositories (`PLAN.md` section 12.2): sys-lib#2, signal-mod#3, signal-mod#4, log-io#1, log-io#2, path-lib#1, config-lib#4, audit-trail#3. The noml-core request is held until OD-2 is answered.
+- [x] Open decisions OD-1 to OD-6 answered by James or accepted as recommended, each recorded in the decision log: OD-1 (D-033), OD-2 (D-034), OD-3 (D-035) answered by James on 2026-10-22; OD-4 (D-016), OD-5 (D-015), OD-6 (D-014) decided. James also replaced the zero-dependency rule with judgement (D-032).
+- [x] Member requests filed in their repositories (`PLAN.md` section 12.2): sys-lib#2, signal-mod#4, log-io#1, log-io#2, path-lib#1, config-lib#4 (cleanup only), audit-trail#3. signal-mod#3 was withdrawn after D-032; no noml-core request is needed after D-034.
 - [x] One new defence idea recorded (`PLAN.md` section 18: the `.env` redirect check; the earlier 0.2 idea was adopted as D-020).
 - [ ] James approves `docs/API.md`.
 
@@ -28,7 +28,6 @@ Exit: James approves `docs/API.md`; every open decision answered.
 API: SUI-02, SUI-03, SUI-04 (build, instance, guard report, paths, env, log, clock, ids, kernel), SUI-05, SUI-06, SUI-10 (builder basics), SUI-16, SUI-20, SUI-23, SUI-24 for the wired members, SUI-26, SUI-27.
 Requires (blockers, recorded 2026-10-22):
 - sys-lib 0.3 (boot kit; [sys-lib#2](https://github.com/jamesgober/sys-lib/issues/2)). sys-lib's own 0.2 design lock is waiting for James.
-- signal-mod with a runtime-free back-end that has no third-party dependencies ([signal-mod#3](https://github.com/jamesgober/signal-mod/issues/3), D-014): the `signals` feature is a default and may not bring signal-hook, libc, or windows-sys.
 - log-io with a recent-lines sink ([log-io#1](https://github.com/jamesgober/log-io/issues/1)) and a file mode option ([log-io#2](https://github.com/jamesgober/log-io/issues/2)): crash capture and T3.
 - path-lib with owner-only directories on Windows ([path-lib#1](https://github.com/jamesgober/path-lib/issues/1)): the T3 attack test on Windows.
 Exit: a service boots with `start!`, logs, parks in `run`, and stops in order on SIGTERM and Ctrl+C on all three OSes; every boot step has a failure-injection test.
@@ -41,7 +40,7 @@ Exit: a service boots with `start!`, logs, parks in `run`, and stops in order on
 
 ## v0.4.0 - Extended: configuration, metrics, kernel services
 API: SUI-04 (config, metrics), SUI-11, SUI-12, SUI-13, SUI-14, SUI-15 (without `Secret`), SUI-21, SUI-22, SUI-25.
-Requires: the configuration backend from OD-2 published without third-party runtime dependencies ([config-lib#4](https://github.com/jamesgober/config-lib/issues/4) if OD-2 picks config-lib; a noml-core release if it picks noml-core).
+Requires: nothing unpublished: config-lib 1.1 is the backend as published (D-034); [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) is a cleanup that can land at any time.
 Exit: configuration loads, validates, and reloads (T7); subsystems register and stop in declared order; workers and timers run supervised with zero idle CPU.
 - [ ] Configuration (section 9): finding, permission check (D-020), the `.env` redirect check (section 18), sections, `FromConfig`, two-phase reload (D-019), with T7 tests. A secret reference is refused in 0.4 (fail closed).
 - Moved to 0.5 (D-031): resolving secret references (FR-16) and the T2 tests. Resolution goes through key-vault (D-025), which this roadmap already wires in 0.5; resolving references in 0.4 would mean pulling key-vault forward or resolving them without it.

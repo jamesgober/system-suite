@@ -21,7 +21,7 @@
         <strong>system-suite</strong> is the foundation for Rust services. One dependency brings what every long-running program needs: system facts and a process guard, application paths, environment variables, configuration, logging, metrics, audit records, a registry, signal handling, time, and ids. A kernel starts them in the right order, supervises background work, reports health and readiness, captures crashes without losing the last log lines, and shuts everything down in reverse.
     </p>
     <p>
-        Each part is its own published library behind its own feature, so a project compiles only what it uses. The suite adds the wiring: the boot order, typed handles to every service, the shutdown order, and the kernel. It has no async runtime, no unsafe code of its own, and no third-party runtime dependencies in its default features.
+        Each part is its own published library behind its own feature, so a project compiles only what it uses. The suite adds the wiring: the boot order, typed handles to every service, the shutdown order, and the kernel. It has no async runtime and no unsafe code of its own; the few third-party crates its members bring (OS bindings, audited cryptography) are reviewed and recorded, one by one.
     </p>
     <br>
     <hr>
@@ -56,7 +56,7 @@ fn main() -> std::process::ExitCode {
 | System facts, build info, instance info, process guard | sys-lib | `sys` (default) |
 | Application and OS directories | path-lib | `paths` (default) |
 | Environment variables, `.env` files | env-lib | `env` (default) |
-| Configuration | config-lib or noml-core (open decision OD-2) | `config` (default) |
+| Configuration | config-lib | `config` (default) |
 | Logging | log-io | `log` (default) |
 | Metrics | metrics-lib | `metrics` (default) |
 | Signals | signal-mod | `signals` (default) |

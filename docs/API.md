@@ -127,20 +127,43 @@ Every member is behind its own feature, and every feature is additive: turning o
 | `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1 | application and OS directories | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
-| `config` | yes | backend per OD-2 (implies `paths`) | one configuration file, reload | none (a requirement on the backend) |
+| `config` | yes | config-lib 1, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2 | structured logging, the crash report's recent lines | none |
 | `metrics` | yes | metrics-lib 2 (no integrations) | counters, gauges, timers, histograms | none |
-| `signals` | yes | signal-mod (implies `kernel`) | stop, reload, dump signals; Windows service control | none (a requirement on signal-mod, see D-014) |
+| `signals` | yes | signal-mod 2, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
 | `time` | yes | clock-lib 1 | monotonic and wall clocks, a mockable `Clock` | none |
 | `ids` | yes | id-forge 1 | ULID, UUID, Snowflake | none |
-| `audit` | no (OD-3) | audit-trail 1 (implies `paths`) | tamper-evident audit chain | sha2 (the recorded cryptography exception) |
+| `audit` | no (D-035) | audit-trail 1 with sha2 (implies `paths`) | tamper-evident audit chain | sha2 |
 | `registry` | no | registry-io 1 (implies `kernel`) | kernel events delivered to callbacks | none |
 | `globals` | no | global-lib 1 | process-wide typed values; `system_suite::foundation()` | none |
 | `rand` | no | mod-rand 1 | OS CSPRNG and fast generators | none |
-| `secrets` | no | key-vault 1 (implies `config`) | secret references resolved into a page-locked vault | subtle, getrandom, blake3, zeroize, arc-swap |
+| `secrets` | no | key-vault 1 with its file and environment fetchers (implies `config`) | secret references resolved into a page-locked vault | subtle, getrandom, blake3, zeroize, arc-swap |
 | `full` | no | all of the above | | as above |
 
-`cargo tree -e normal` with default features lists no third-party crate (definition of done, item 3).
+Every third-party crate in this table is a reviewed choice recorded in the dependency register of [`../dev/PLAN.md`](../dev/PLAN.md) (section 12.4, D-032), and `cargo audit` and `cargo deny` check them on every CI build. No feature brings an async runtime (D-005).
+
+### Member features passed through
+
+A member's own optional features are available through the suite, so a project still needs one dependency line (D-036). Each is named `<suite feature>-<member feature>`, turns on the suite feature it extends, and arrives with that member's wiring:
+
+| Feature | Turns on | Brings | Since |
+|---|---|---|---|
+| `log-bridge` | log-io's `log`: records from crates that use the `log` facade go to the suite's logger | log | 0.3 |
+| `log-tracing` | log-io's `tracing`: a `tracing` subscriber that writes through log-io | tracing-core, tracing-subscriber | 0.3 |
+| `time-serde` | clock-lib's `serde`: `Wall` and `Monotonic` serialise | serde | 0.3 |
+| `config-json`, `config-toml`, `config-noml`, `config-xml` | config-lib's formats of the same names | serde_json; noml; noml; quick-xml | 0.4 |
+| `config-validation` | config-lib's rule-based validation | regex | 0.4 |
+| `metrics-histogram`, `metrics-meter` | metrics-lib's histogram and summary, rate meter | none | 0.4 |
+| `metrics-http` | metrics-lib's HTTP exporter and Pushgateway client | http | 0.4 |
+| `metrics-statsd`, `metrics-otlp`, `metrics-json` | metrics-lib's StatsD push, OTLP rendering, JSON rendering | serde, serde_json (OTLP, JSON) | 0.4 |
+| `metrics-tracing` | metrics-lib's tracing integration | tracing | 0.4 |
+| `audit-blake3` | audit-trail's BLAKE3 hasher (selected with `[audit] hash = "blake3"`) | blake3 | 0.5 |
+| `registry-async` | registry-io's `AsyncRegistry` (runtime-agnostic futures, no executor) | futures-core | 0.5 |
+| `secrets-keychain` | key-vault's OS keychain fetcher | keyring; on Linux its Secret Service back-end runs async-io's reactor thread, so this one is decided against the register when key-vault is wired | 0.5 |
+
+Not passed through: anything that brings an async runtime (signal-mod's `tokio`, metrics-lib's `async`, config-lib's `async`, key-vault's TPM stub), and config-lib's `hot-reload` (an idle watcher thread; the suite reloads by signal or call).
+
+A project can also reach any member feature directly: adding the member with the feature it wants (`metrics-lib = { version = "2", default-features = false, features = ["http"] }`) works too, because Cargo merges the features of one crate version, so `system_suite::metrics` gets it. The pass-through is the same thing without the second line and without having to match the member's version by hand.
 
 ### Build info in `build.rs`
 
@@ -1480,7 +1503,7 @@ let _guard = system.events().register_guard(|event: &Event| {
 
 **Since** 0.4 to 0.5 · SUI-15 · feature `config`
 
-The suite's view of the configuration: one file per application, one section per member, read through a backend that OD-2 chooses. The view below does not depend on the backend: changing the backend changes the accepted file syntax, not these signatures (D-018). The backend crate itself is re-exported as `config::backend` for anything the view does not cover.
+The suite's view of the configuration: one file per application, one section per member, read through config-lib (D-034) in its `conf` format. The view below does not depend on the backend: a later format (NOML or TOML through `config-noml` / `config-toml`, or a change of backend) changes the accepted file syntax, not these signatures (D-018). config-lib itself is re-exported as `config::backend` for anything the view does not cover.
 
 ### `Config`
 
@@ -1497,7 +1520,7 @@ impl Config {
     pub fn version(&self) -> u64;                   // 1 at boot, +1 per applied reload
     #[cfg(feature = "secrets")]
     pub fn secret(&self, path: &str) -> Result<Secret, Error>;
-    pub fn backend(&self) -> &backend::Document;    // the backend's own type (OD-2)
+    pub fn backend(&self) -> &backend::Config;      // config-lib's own type
 }
 ```
 
@@ -1567,8 +1590,8 @@ The first that applies wins:
 
 1. `Builder::config_file(path)` or `Builder::config_str(text)`;
 2. the `<NAME>_CONFIG` variable (from the process environment or the `.env` file);
-3. `<config dir>/<name>.<ext>`, the extension being the backend's (OD-2);
-4. `./<name>.<ext>` in the working directory, only when the process is not running as root or an administrator (a working directory is easy to influence; a privileged service must name its file).
+3. `<config dir>/<name>.conf` (with `config-toml` or `config-noml`, also `<name>.toml` or `<name>.noml`; finding two is a `ConfigInvalid` error naming both);
+4. `./<name>.conf` (and the same alternatives) in the working directory, only when the process is not running as root or an administrator (a working directory is easy to influence; a privileged service must name its file).
 
 In cases 1 and 2 a missing file is an error. In cases 3 and 4 a missing file means "no file": every section takes its defaults and the first log lines say which places were searched. Before parsing, the file's owner and permissions are checked (the 0.2 defence idea, D-020): on Unix a file that is group- or world-writable, or owned by a user other than the service user or root, is refused with `ConfigInsecure`.
 
@@ -1625,7 +1648,7 @@ Each member crate is re-exported whole, so a project depends only on `system-sui
 | `system_suite::sys` | sys-lib | `sys` | 0.3 |
 | `system_suite::path` | path-lib | `paths` | 0.3 |
 | `system_suite::env` | env-lib | `env` | 0.3 |
-| `system_suite::config::backend` | the configuration backend (OD-2) | `config` | 0.4 |
+| `system_suite::config::backend` | config-lib | `config` | 0.4 |
 | `system_suite::log` | log-io | `log` | 0.3 |
 | `system_suite::metrics` | metrics-lib | `metrics` | 0.4 |
 | `system_suite::signal` | signal-mod | `signals` | 0.3 |
@@ -1661,7 +1684,7 @@ Signals reach only the kernel (D-006, invariant). The kernel installs signal-mod
 | dump | SIGUSR1 | service user control code 128 | the health report, phase, urgent level, workers, build and instance info written to the log | 0.4 |
 | a second stop signal during shutdown | | | recorded and ignored: the shutdown already has a deadline | 0.3 |
 
-The Windows service rows and the dependency-free intake need signal-mod releases that are requested (D-014); until they ship, a Windows service is stopped through the console events the service manager sends at system shutdown. `[kernel] reload_signal` and `dump_signal` turn those two off.
+The Windows service rows need a signal-mod release that is requested (D-014, [signal-mod#4](https://github.com/jamesgober/signal-mod/issues/4)); until it ships, a Windows service is stopped through the console events the service manager sends at system shutdown. `[kernel] reload_signal` and `dump_signal` turn those two off.
 
 ## Versioning
 

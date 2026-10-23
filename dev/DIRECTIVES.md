@@ -19,7 +19,7 @@ system-suite bundles the foundation libraries (system facts and boot kit, paths,
 ## 2. Engineering law (non-negotiable)
 
 - **Wiring, not features.** A capability a member should have is added to that member, in its own pull request, never re-implemented here (D-002).
-- **Ours, not rented.** No third-party runtime dependency in the default feature set beyond the recorded cryptography exception. Members are added by published version, never as a `path` dependency to a sibling repository. No async runtime (D-005).
+- **Judged, not counted.** Every third-party runtime dependency is a reviewed choice recorded in the dependency register (`PLAN.md` section 12.4, D-032): maintainer, maintenance, `unsafe` record, transitive tree, MSRV, licence. A necessity (OS bindings, audited cryptography, async-signal-safe handling) is taken from its best maintained source rather than rewritten. Members are added by published version, never as a `path` dependency to a sibling repository. No async runtime (D-005).
 - **Fail closed.** A boot step that fails stops the boot and unwinds what started; nothing is left half-running. A configuration that cannot be validated is refused.
 - **Order is law.** The boot and shutdown orders in `PLAN.md` section 7 are tested and documented; changing them is a recorded decision.
 - **Typed handles.** Members are resolved once at boot; nothing is looked up by name at runtime.
@@ -37,7 +37,7 @@ system-suite bundles the foundation libraries (system facts and boot kit, paths,
 
 1. Compiles clean on Linux, macOS, and Windows (x86_64 and aarch64), stable and MSRV 1.89.
 2. `fmt`, `clippy -D warnings` (all targets; default, all, and no default features), tests in the same three modes, `cargo doc -D warnings` with default and all features, and `cargo package` in a fresh target directory: clean on Windows and in WSL Ubuntu, stable and 1.89.
-3. `cargo audit` and `cargo deny check` pass; `cargo tree` shows no third-party runtime dependency with default features other than recorded exceptions.
+3. `cargo audit` and `cargo deny check` pass; `cargo tree` shows no third-party runtime dependency that is missing from the dependency register (`PLAN.md` section 12.4).
 4. A Tier-1 API exists and headlines the docs (`system_suite::start`, `System::run`).
 5. Every boot and shutdown step has a failure-injection test; every threat in `PLAN.md` section 10 has an attack test that must fail to get through.
 6. Hot-path changes carry benchmarks; no regression over 5%.
