@@ -46,9 +46,8 @@ path = "src/lib.rs"
 # FEATURE FLAGS
 # #################################
 # Every member is behind its own feature, so a project compiles only what it
-# uses. The features are declared now and stay empty until each member is
-# wired, by published version, with the first code that needs it
-# (dev/PLAN.md section 4 lists each member, its version, and its blockers).
+# uses. A feature whose member is not wired yet stays empty until the release
+# that wires it (dev/ROADMAP.md); dev/PLAN.md section 4 lists each member.
 [features]
 default = ["kernel", "sys", "paths", "env", "config", "log", "metrics", "signals", "time", "ids"]
 
@@ -58,36 +57,37 @@ full = [
     "audit", "registry", "globals", "rand", "secrets",
 ]
 
-# The kernel: lifecycle, boot and shutdown order, urgent line, workers and
-# timers, health, readiness, crash capture.
+# The kernel and its parts: the `kernel`, `lifecycle`, and `runtime` modules
+# (stop decisions, phases, crash capture; subsystems, workers, and timers
+# from 0.4).
 kernel = []
 
 # System facts and the boot kit: build info, instance info, process guard (sys-lib).
-sys = []
+sys = ["dep:sys-lib"]
 
 # Application and OS directories (path-lib).
-paths = []
+paths = ["dep:path-lib"]
 
 # Environment variables and .env files (env-lib).
-env = []
+env = ["paths", "dep:env-lib"]
 
-# Configuration (config-lib, `conf` format; dev/PLAN.md, D-034).
-config = []
+# Configuration (config-lib, `conf` format; dev/PLAN.md, D-034). Wired in 0.4.
+config = ["paths"]
 
 # Structured logging (log-io).
-log = []
+log = ["dep:log-io"]
 
-# Metrics (metrics-lib).
+# Metrics (metrics-lib). Wired in 0.4.
 metrics = []
 
 # OS signals translated by the kernel (signal-mod).
-signals = []
+signals = ["kernel", "dep:signal-mod"]
 
 # Monotonic and wall-clock time, mockable (clock-lib).
-time = []
+time = ["dep:clock-lib"]
 
 # Request, instance, and entity ids (id-forge).
-ids = []
+ids = ["dep:id-forge"]
 
 # Tamper-evident audit records (audit-trail, sha2). Opt-in: dev/PLAN.md, D-035.
 audit = []
@@ -101,15 +101,42 @@ globals = []
 # Randomness, including the OS CSPRNG (mod-rand).
 rand = []
 
-# Page-locked secret storage (key-vault). Opt-in: third-party dependencies.
+# Page-locked secret storage (key-vault). Opt-in.
 secrets = []
+
+# Member features passed through (dev/PLAN.md section 12.5, D-036).
+# clock-lib's serde support: `Wall` and `Monotonic` serialise.
+time-serde = ["time", "clock-lib/serde"]
 
 
 # DEPENDENCIES
 # #################################
+# Members by published version, never `path` (dev/PLAN.md, D-003). Every
+# third-party crate they bring is reviewed in dev/PLAN.md section 12.4.
 [dependencies]
-# None yet. Each member is added by published version (never `path`) with
-# the first code that needs it; dev/PLAN.md section 4 is the list.
+# Build info, instance info, process guard. First-party; brings path-lib,
+# clock-lib, and id-forge (all first-party, no third-party crates).
+sys-lib = { version = "0.3", optional = true }
+
+# Application directories and hardened joins. First-party, no dependencies.
+path-lib = { version = "1.0", optional = true }
+
+# The .env file and typed variables. First-party; brings path-lib.
+env-lib = { version = "1.0", optional = true }
+
+# Structured logging. First-party; no dependencies with these features.
+log-io = { version = "2.0", optional = true }
+
+# Signals without an async runtime: the `agnostic` back-end only (never
+# `tokio`, D-005). Brings signal-hook and libc on Unix and windows-sys on
+# Windows (reviewed and accepted, dev/PLAN.md section 12.4, D-032).
+signal-mod = { version = "2.0", optional = true, default-features = false, features = ["std", "agnostic"] }
+
+# Monotonic and wall clocks, mockable. First-party, no dependencies.
+clock-lib = { version = "1.1", optional = true, default-features = false, features = ["std"] }
+
+# ULID, UUID, Snowflake, NanoID. First-party, no dependencies.
+id-forge = { version = "1.0", optional = true }
 
 
 # DEV DEPENDENCIES
