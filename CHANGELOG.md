@@ -13,6 +13,50 @@
 
 ---
 
+## [0.2.0] - 2026-10-22
+
+The design lock. No functional code yet.
+
+### Added
+
+- `docs/API.md`: the complete public API (items SUI-01 to SUI-30) with
+  signatures, errors, exit codes, costs, examples, and the version each item
+  arrives in: `start!`, `System`, `Builder`, `Boot`, `Foundation`, `Error`
+  and `ErrorKind`, the `kernel`, `lifecycle`, and `runtime` modules (urgent
+  line, health, events, subsystems, workers, timers), the configuration view,
+  `AuditLog`,
+  `Snapshot`, and the member modules.
+- `docs/BOOT-ORDER.md`: the boot and shutdown orders with the reason for
+  every position, the deadlines, reload, and crash handling.
+
+### Changed
+
+- The Tier 1 entry point is the macro `start!()`, so the application's build
+  info is recorded (`dev/PLAN.md`, D-008).
+- The boot order reads paths, the environment, and the configuration before
+  the process guard, and takes the guard before anything is created or any
+  thread starts (D-012).
+- `dev/PLAN.md`: member facts corrected after reading every member's public
+  API, member requests filed, open decisions OD-4 to OD-6 decided and OD-1 to
+  OD-3 answered by James (the kernel is built here, config-lib is the
+  configuration backend, audit is opt-in), decisions D-008 to D-036, a new
+  defence idea.
+- Dependency policy: the zero-third-party-dependency rule is replaced by a
+  reviewed dependency register (`dev/PLAN.md` section 12.4, D-032);
+  signal-mod's signal-hook, libc, and windows-sys, config-lib's
+  dependencies, and audit-trail's sha2 are accepted. No async runtime, as
+  before.
+- `docs/API.md`: member features passed through as
+  `<suite feature>-<member feature>` features (D-036).
+- The kernel's parts are three modules: `kernel` (the controller),
+  `lifecycle` (phases and the `Subsystem` contract), and `runtime` (workers
+  and timers, through a `Runtime` handle) (D-037).
+- `dev/ROADMAP.md`: a review by James before the API freeze in 0.9.
+- `dev/ROADMAP.md`: member releases recorded as blockers for 0.3 and 0.5;
+  secret-reference resolution moved to 0.5 with key-vault (D-031).
+
+---
+
 ## [0.1.0] - 2026-10-22
 
 The scaffold and the plan. No functional code yet.
@@ -34,5 +78,6 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jamesgober/system-suite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/system-suite/releases/tag/v0.1.0

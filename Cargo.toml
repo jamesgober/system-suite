@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "system-suite"
-version = "0.1.0"
+version = "0.2.0"
 
 # Minimum Supported Rust Version (MSRV)
 # 1.89: the highest MSRV among the members (sys-lib needs `File::lock` and
@@ -71,7 +71,7 @@ paths = []
 # Environment variables and .env files (env-lib).
 env = []
 
-# Configuration (backend decided in dev/PLAN.md, OD-2).
+# Configuration (config-lib, `conf` format; dev/PLAN.md, D-034).
 config = []
 
 # Structured logging (log-io).
@@ -89,7 +89,7 @@ time = []
 # Request, instance, and entity ids (id-forge).
 ids = []
 
-# Tamper-evident audit records (audit-trail). Opt-in: see dev/PLAN.md, OD-3.
+# Tamper-evident audit records (audit-trail, sha2). Opt-in: dev/PLAN.md, D-035.
 audit = []
 
 # Event and callback registry (registry-io). Opt-in until the kernel needs it.
