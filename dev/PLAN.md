@@ -4,7 +4,7 @@
 >
 > **Read order:** [`../REPS.md`](../REPS.md), then [`DIRECTIVES.md`](./DIRECTIVES.md), then **this file**, then [`ROADMAP.md`](./ROADMAP.md).
 >
-> **Status:** `0.1.0` published. The `0.2.0` design lock is written ([`../docs/API.md`](../docs/API.md), [`../docs/BOOT-ORDER.md`](../docs/BOOT-ORDER.md)); every open decision is answered. It waits for James's approval of `docs/API.md`.
+> **Status:** `0.1.0` published. The `0.2.0` design lock is written ([`../docs/API.md`](../docs/API.md), [`../docs/BOOT-ORDER.md`](../docs/BOOT-ORDER.md)); every open decision is answered and James approved `docs/API.md` on 2026-10-22. `0.2.0` is the design lock release; `0.3.0` (the first boot path) is next, blocked on sys-lib 0.3.
 
 ---
 
@@ -184,7 +184,7 @@ log-io and mod-rand are licensed Apache-2.0 only; the suite's own code stays `Ap
 
 ### 6.1 What it is
 
-The kernel is the suite's controller: it owns the lifecycle, the order, and the background work. It is the "system core" of the cores architecture: every subsystem registers with it, and registration is the subscription (nothing can miss a stop or an urgent change).
+The kernel is the suite's controller: it owns the lifecycle, the order, and the background work. It is built as three modules of this crate, all behind the `kernel` feature (D-037): `kernel` (the controller: signals to decisions, urgent line, boot and shutdown orders, health, readiness, crash capture, events), `lifecycle` (the phases and the `Subsystem` contract), and `runtime` (supervised workers and timers). It is the "system core" of the cores architecture: every subsystem registers with it, and registration is the subscription (nothing can miss a stop or an urgent change).
 
 ### 6.2 Lifecycle
 
@@ -312,8 +312,8 @@ fn main() -> std::process::ExitCode {
 | SUI-10 | `Builder`: `build_info`, `scope`, `portable`, `env_file`, `config_file`, `config_str`, `clock`, `disable(member)`, `process_wide`, `crash_capture`, `single_instance`, `shutdown_deadline`, `member_reserve`, `register(subsystem)`, `on_ready`, `on_vault`, `start`, `boot` | 0.3 to 0.5 |
 | SUI-11 | `System::request_stop(&self, reason) -> bool`; `System::reload(&self) -> Result<u64, Error>` | 0.4 |
 | SUI-12 | `System::health(&self) -> HealthReport`, `System::status(&self) -> Status` (D-022) | 0.4 |
-| SUI-13 | `Subsystem` trait (`name`, `position`, `start(&Link)`, `stop(Deadline)`, `health`, `reload -> Commit`), `Position`, `Link` with its `Mailbox` and error hook, `Failure`, `Commit` | 0.4 |
-| SUI-14 | `kernel::Worker` (restart policy, backoff, budget, criticality, heartbeat), `WorkerContext`, `WorkerHandle`; timers `Kernel::every`, `Kernel::after` | 0.4 |
+| SUI-13 | `lifecycle::Subsystem` trait (`name`, `position`, `start(&Link)`, `stop(Deadline)`, `health`, `reload -> Commit`), `Position`, `Link` with its `Mailbox` and error hook, `Failure`, `Commit` | 0.4 |
+| SUI-14 | `runtime::Runtime`, `Worker` (restart policy, backoff, budget, criticality, heartbeat), `WorkerContext`, `WorkerHandle`; timers `Runtime::every`, `Runtime::after` | 0.4 |
 | SUI-15 | `config::Config` (backend-neutral view, D-018), `FromConfig`, `Secret` | 0.4 (`Secret` 0.5) |
 | SUI-16 | `exit` codes (D-017) | 0.3 |
 
@@ -328,7 +328,7 @@ fn main() -> std::process::ExitCode {
 | SUI-24 | Re-exported member modules: `sys`, `path`, `env`, `config::backend`, `log`, `metrics`, `signal`, `clock`, `id`, `audit`, `registry`, `global`, `rand`, `vault` | as each member is wired |
 | SUI-25 | `Builder::boot` and `Boot`: staged start for frameworks (D-013) | 0.4 |
 | SUI-26 | `System::wait_for_stop`, `System::shutdown` | 0.3 |
-| SUI-27 | `Kernel` control handle, `Phase`, `StopReason`, `Deadline` | 0.3 |
+| SUI-27 | `kernel::Kernel` control handle, `lifecycle::{Phase, StopReason, Deadline}` | 0.3 |
 | SUI-28 | `kernel::Event` and `Foundation::events` | 0.5 |
 | SUI-29 | `AuditLog` | 0.5 |
 | SUI-30 | `system_suite::foundation()` (feature `globals`) | 0.5 |
@@ -376,14 +376,19 @@ src/
   config.rs       configuration finding, permission check, sections, FromConfig, secret references
   audit.rs        AuditLog
   kernel/
-    mod.rs        Kernel, lifecycle state
+    mod.rs        Kernel control handle, stop decisions
     urgent.rs     UrgentLine (T0, T1)
     signals.rs    signal translation (signal-mod)
-    worker.rs     supervised workers
-    timer.rs      timing wheel
     health.rs     aggregation, readiness, sd_notify, watchdog heartbeat
     crash.rs      panic hook, crash report
-    subsystem.rs  Subsystem trait, registration
+    events.rs     Event, registry publication
+  lifecycle/
+    mod.rs        Phase, StopReason, Deadline, the transition table
+    subsystem.rs  Subsystem, Position, Link, Mailbox, Failure, Commit
+  runtime/
+    mod.rs        Runtime handle
+    worker.rs     supervised workers, Restart, Backoff
+    timer.rs      timing wheel
 ```
 
 ---
@@ -549,3 +554,4 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 | D-034 | 2026-10-22 | OD-2 (James): config-lib is the configuration backend, as published, with the `conf` format; `hot-reload` (notify) off | config-lib was meant for this; its dependencies are accepted under D-032; config-lib and the suite are updated together later |
 | D-035 | 2026-10-22 | OD-3 (James): audit is opt-in; sha2 is the default hash, blake3 through `audit-blake3` | sha2 is not the concern (D-032); a chain file per run is, for tools and small services |
 | D-036 | 2026-10-22 | Member features are passed through as `<suite feature>-<member feature>` features (for example `metrics-http`, `log-tracing`, `config-json`), each checked against the dependency register; no pass-through brings an async runtime | a project gets a member's optional feature without a second dependency line; adding the member directly still works through Cargo's feature merging |
+| D-037 | 2026-10-22 | James: lifecycle and runtime are built here too, as the `lifecycle` and `runtime` modules beside `kernel` (one `kernel` feature for all three); `Runtime` is its own handle (`Foundation::runtime()`), and workers and timers moved off `Kernel` onto it | his foundation plan names kernel, runtime, and lifecycles as separate parts; one module per responsibility; separate crates wait for a consumer that needs them without the suite (the same rule as D-033); one feature because the kernel cannot run without the other two |

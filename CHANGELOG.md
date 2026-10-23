@@ -11,6 +11,10 @@
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] - 2026-10-22
+
 The design lock. No functional code yet.
 
 ### Added
@@ -18,8 +22,9 @@ The design lock. No functional code yet.
 - `docs/API.md`: the complete public API (items SUI-01 to SUI-30) with
   signatures, errors, exit codes, costs, examples, and the version each item
   arrives in: `start!`, `System`, `Builder`, `Boot`, `Foundation`, `Error`
-  and `ErrorKind`, the `kernel` module (lifecycle, urgent line, subsystems,
-  workers, timers, health, events), the configuration view, `AuditLog`,
+  and `ErrorKind`, the `kernel`, `lifecycle`, and `runtime` modules (urgent
+  line, health, events, subsystems, workers, timers), the configuration view,
+  `AuditLog`,
   `Snapshot`, and the member modules.
 - `docs/BOOT-ORDER.md`: the boot and shutdown orders with the reason for
   every position, the deadlines, reload, and crash handling.
@@ -43,6 +48,10 @@ The design lock. No functional code yet.
   before.
 - `docs/API.md`: member features passed through as
   `<suite feature>-<member feature>` features (D-036).
+- The kernel's parts are three modules: `kernel` (the controller),
+  `lifecycle` (phases and the `Subsystem` contract), and `runtime` (workers
+  and timers, through a `Runtime` handle) (D-037).
+- `dev/ROADMAP.md`: a review by James before the API freeze in 0.9.
 - `dev/ROADMAP.md`: member releases recorded as blockers for 0.3 and 0.5;
   secret-reference resolution moved to 0.5 with key-vault (D-031).
 
@@ -69,5 +78,6 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jamesgober/system-suite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/system-suite/releases/tag/v0.1.0

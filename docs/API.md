@@ -62,19 +62,22 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
   - [Exit codes](#exit-codes)
 - [`kernel`](#kernel)
   - [`Kernel`](#kernel-1)
+  - [The urgent line: `UrgentLine`, `Level`, `Watch`, `Notice`](#the-urgent-line-urgentline-level-watch-notice)
+  - [Health: `Health`, `Status`, `HealthReport`](#health-health-status-healthreport)
+  - [`Event`](#event)
+- [`lifecycle`](#lifecycle)
   - [`Phase` and `StopReason`](#phase-and-stopreason)
   - [`Deadline`](#deadline)
-  - [The urgent line: `UrgentLine`, `Level`, `Watch`, `Notice`](#the-urgent-line-urgentline-level-watch-notice)
   - [`Subsystem`](#subsystem)
   - [`Position`](#position)
   - [`Link` and `Mailbox`](#link-and-mailbox)
   - [`Failure`](#failure)
   - [`Commit`](#commit)
+- [`runtime`](#runtime)
+  - [`Runtime`](#runtime-1)
   - [Workers: `Worker`, `WorkerContext`, `WorkerHandle`](#workers-worker-workercontext-workerhandle)
   - [`Restart` and `Backoff`](#restart-and-backoff)
-  - [Timers: `Kernel::every`, `Kernel::after`, `TimerHandle`](#timers-kernelevery-kernelafter-timerhandle)
-  - [Health: `Health`, `Status`, `HealthReport`](#health-health-status-healthreport)
-  - [`Event`](#event)
+  - [Timers: `Runtime::every`, `Runtime::after`, `TimerHandle`](#timers-runtimeevery-runtimeafter-timerhandle)
 - [`config`](#config)
   - [`Config`](#config-1)
   - [`FromConfig`](#fromconfig)
@@ -123,7 +126,7 @@ Every member is behind its own feature, and every feature is additive: turning o
 
 | Feature | Default | Member (crate) | Brings | Third-party runtime dependencies |
 |---|---|---|---|---|
-| `kernel` | yes | this crate | lifecycle, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
+| `kernel` | yes | this crate: modules `kernel`, `lifecycle`, `runtime` | signals to decisions, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
 | `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1 | application and OS directories | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
@@ -194,7 +197,7 @@ The suite starts no thread before the guard (boot step 6). With every default me
 | Thread | Started by | When it wakes |
 |---|---|---|
 | `signal-mod-signals` (Unix only) | signal-mod | a signal arrives |
-| `system-suite-timer` | the kernel | a timer is due; parks with no timeout when none is |
+| `system-suite-timer` | the runtime | a timer is due; parks with no timeout when none is |
 | one per supervised worker | `Worker::spawn` | as the worker decides |
 | `system-suite-stop-<n>` | the kernel, only during shutdown | runs one subsystem's `stop` so the deadline can be enforced |
 
@@ -514,9 +517,9 @@ std::thread::spawn(move || {
 
 ```rust,ignore
 impl System {
-    pub fn phase(&self) -> kernel::Phase;
+    pub fn phase(&self) -> lifecycle::Phase;
     pub fn run(self) -> ExitCode;                    // Tier 1, above
-    pub fn wait_for_stop(&self) -> kernel::StopReason;
+    pub fn wait_for_stop(&self) -> lifecycle::StopReason;
     pub fn shutdown(self) -> ExitCode;
 }
 ```
@@ -698,11 +701,11 @@ let system = system_suite::System::builder("hive")
 
 ```rust,ignore
 impl Builder {
-    pub fn register(self, subsystem: impl kernel::Subsystem) -> Self;                         // 0.4
+    pub fn register(self, subsystem: impl lifecycle::Subsystem) -> Self;                         // 0.4
     pub fn on_ready<F>(self, callback: F) -> Self                                              // 0.4
-        where F: FnOnce(&Foundation) -> Result<(), kernel::Failure> + Send + 'static;
+        where F: FnOnce(&Foundation) -> Result<(), lifecycle::Failure> + Send + 'static;
     pub fn on_vault<F>(self, callback: F) -> Self                                              // 0.5, feature secrets
-        where F: FnOnce(&vault::KeyVault) -> Result<(), kernel::Failure> + Send + 'static;
+        where F: FnOnce(&vault::KeyVault) -> Result<(), lifecycle::Failure> + Send + 'static;
 }
 ```
 
@@ -741,7 +744,7 @@ pub struct Boot { /* the System under construction */ }
 impl Boot {
     pub fn foundation(&self) -> &Foundation;
     pub fn kernel(&self) -> &kernel::Kernel;
-    pub fn start(&mut self, subsystem: impl kernel::Subsystem) -> Result<(), Error>;
+    pub fn start(&mut self, subsystem: impl lifecycle::Subsystem) -> Result<(), Error>;
     pub fn ready(self) -> Result<System, Error>;
 }
 ```
@@ -794,6 +797,7 @@ The typed handles of every enabled member, built once at boot. It is what a fram
 | `events(&self)` | `&Arc<registry::SyncRegistry<kernel::Event>>` | `registry` | 0.5 |
 | `vault(&self)` | `&vault::KeyVault` | `secrets` | 0.5 |
 | `kernel(&self)` | `&kernel::Kernel` | `kernel` | 0.3 |
+| `runtime(&self)` | `&runtime::Runtime` | `kernel` | 0.4 |
 
 A member disabled at run time with [`Builder::disable`](#members) still has its accessor (the build decides what exists): `log()` returns a logger with no sinks, `metrics()` a registry nothing exports, `config()` the defaults, `env()` an empty environment. The accessors of `Audit`, `Registry`, and `Secrets` return handles whose operations fail with kind `Disabled`.
 
@@ -912,7 +916,7 @@ The codes follow BSD `sysexits.h` (D-017), so supervisors and scripts can tell a
 
 **Since** 0.3 to 0.5 · feature `kernel`
 
-The suite's controller: the lifecycle, the urgent line, the application's subsystems, supervised workers, timers, health, readiness, and crash capture. Everything here is `std` only, with no async runtime (D-005).
+The suite's controller: it receives the signals, decides when the process stops, raises the urgent line, runs the boot and shutdown orders, aggregates health, reports readiness, captures crashes, and records what happened. The parts it drives are their own modules: [`lifecycle`](#lifecycle) (the phases and the contract every subsystem follows) and [`runtime`](#runtime) (supervised workers and timers) (D-037). Everything here is `std` only, with no async runtime (D-005).
 
 ### `Kernel`
 
@@ -922,15 +926,15 @@ The suite's controller: the lifecycle, the urgent line, the application's subsys
 #[derive(Clone)]
 pub struct Kernel { /* Arc: the kernel's control block */ }
 impl Kernel {
-    pub fn phase(&self) -> Phase;                                                   // 0.3
-    pub fn request_stop(&self, reason: &'static str) -> bool;                      // 0.3
-    pub fn stop_reason(&self) -> Option<StopReason>;                               // 0.3
-    pub fn wait_for_stop(&self) -> StopReason;                                     // 0.3
-    pub fn wait_for_stop_timeout(&self, timeout: Duration) -> Option<StopReason>;  // 0.3
+    pub fn phase(&self) -> lifecycle::Phase;                                                   // 0.3
+    pub fn request_stop(&self, reason: &'static str) -> bool;                                 // 0.3
+    pub fn stop_reason(&self) -> Option<lifecycle::StopReason>;                               // 0.3
+    pub fn wait_for_stop(&self) -> lifecycle::StopReason;                                     // 0.3
+    pub fn wait_for_stop_timeout(&self, timeout: Duration) -> Option<lifecycle::StopReason>;  // 0.3
     pub fn urgent(&self) -> &UrgentLine;                                           // 0.4
     pub fn health(&self) -> HealthReport;                                          // 0.4
     pub fn status(&self) -> Status;                                                // 0.4
-    // Workers and timers: below.
+    pub fn runtime(&self) -> &runtime::Runtime;                                    // 0.4
 }
 ```
 
@@ -943,61 +947,6 @@ std::thread::spawn(move || {
         kernel.request_stop("disk almost full");
     }
 });
-```
-
-### `Phase` and `StopReason`
-
-**Since** 0.3 · SUI-27
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum Phase { Booting, Ready, Draining, Stopping, Stopped }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum StopReason {
-    Signal { name: &'static str },      // "SIGTERM", "SIGINT", "CTRL_C", "CTRL_CLOSE", "SERVICE_STOP", ...
-    Requested { reason: &'static str }, // request_stop
-    WorkerFailed { name: String },      // a critical worker exhausted its restart budget
-    Supervisor { reason: String },      // the out-of-process watchdog (tower), when present
-}
-impl std::fmt::Display for StopReason;
-impl StopReason { pub fn exit_code(&self) -> u8; }   // 0, except WorkerFailed: 70
-```
-
-```text
- Booting ─▶ Ready ─▶ Draining ─▶ Stopping ─▶ Stopped
-    │                    ▲
-    └── boot failure ────┘ (reverse shutdown of what started, then Stopped)
-```
-
-A reload never changes the phase. `Phase` values compare in lifecycle order (`phase >= Phase::Draining` means "going down").
-
-### `Deadline`
-
-**Since** 0.3
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Deadline { /* std::time::Instant */ }
-impl Deadline {
-    pub fn after(duration: Duration) -> Deadline;
-    pub fn instant(&self) -> std::time::Instant;
-    pub fn remaining(&self) -> Duration;        // zero once passed
-    pub fn is_past(&self) -> bool;
-}
-```
-
-The point in time by which a subsystem's `stop` (or a worker during shutdown) must return. Always the OS monotonic clock, never the `Builder::clock`, so a test clock cannot stall a shutdown.
-
-```rust
-use system_suite::kernel::Deadline;
-use std::time::Duration;
-
-let deadline = Deadline::after(Duration::from_millis(50));
-assert!(!deadline.is_past());
-assert!(deadline.remaining() <= Duration::from_millis(50));
 ```
 
 ### The urgent line: `UrgentLine`, `Level`, `Watch`, `Notice`
@@ -1072,6 +1021,165 @@ line.set(Level::Shed, "memory above 90%")?;
 line.set(Level::Normal, "memory below 80%")?;
 ```
 
+### Health: `Health`, `Status`, `HealthReport`
+
+**Since** 0.4 · SUI-12
+
+```rust,ignore
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum Status { Healthy, Degraded, Unhealthy }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Health { /* status, optional reason */ }
+impl Health {
+    pub const HEALTHY: Health;
+    pub fn degraded(reason: impl Into<Cow<'static, str>>) -> Health;
+    pub fn unhealthy(reason: impl Into<Cow<'static, str>>) -> Health;
+    pub fn status(&self) -> Status;
+    pub fn reason(&self) -> Option<&str>;
+}
+
+#[derive(Clone, Debug)]
+pub struct HealthReport { /* status, phase, urgent level, components */ }
+impl HealthReport {
+    pub fn status(&self) -> Status;
+    pub fn phase(&self) -> Phase;
+    pub fn urgent(&self) -> Level;
+    pub fn ready(&self) -> bool;        // phase Ready and status not Unhealthy: a readiness probe
+    pub fn live(&self) -> bool;         // the kernel is running: a liveness probe
+    pub fn components(&self) -> &[ComponentHealth];
+    pub fn write_json(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result;
+    pub fn write_kv(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result;
+}
+impl std::fmt::Display for HealthReport;    // one line per component
+
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ComponentHealth {
+    pub kind: Component,
+    pub name: Cow<'static, str>,
+    pub health: Health,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Component { Member(Member), Subsystem, Worker, Timers }
+```
+
+Health aggregates every member, subsystem, worker, and the timer thread (FR-11). The aggregate is the worst component status, with one exception: a worker that is not `critical` can make the system at most `Degraded`. The report never contains a configuration value or a secret; reasons are the components' own words.
+
+When `NOTIFY_SOCKET` is set (systemd, Linux only), the kernel sends `READY=1` at boot step 17, `STATUS=<phase, status>` on every change, `WATCHDOG=1` at half of `WATCHDOG_USEC` while the status is not `Unhealthy` (so systemd restarts a wedged process), and `STOPPING=1` at shutdown step 1. It uses a std Unix datagram socket, no FFI. A heartbeat to the planned out-of-process watchdog (tower) is added when tower exists; the API above does not change.
+
+| Operation | Cost [est.] |
+|---|---|
+| `status()` | one `health()` call per subsystem, an atomic read per worker; no allocation (counting-allocator tested) |
+| `health()` | the same plus one `Vec` and the reasons |
+
+```rust,ignore
+// A health endpoint.
+let report = system.health();
+let mut body = String::with_capacity(512);
+report.write_json(&mut body)?;
+respond(if report.ready() { 200 } else { 503 }, "application/json", body);
+```
+
+```json
+{"status":"degraded","phase":"ready","urgent":"normal","components":[
+ {"kind":"member","name":"log","status":"healthy"},
+ {"kind":"subsystem","name":"db","status":"degraded","reason":"replica lag 12 s"},
+ {"kind":"worker","name":"log-shipper","status":"healthy"}]}
+```
+
+### `Event`
+
+**Since** 0.5 · SUI-28 · feature `registry`
+
+```rust,ignore
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum Event {
+    Phase { from: Phase, to: Phase },
+    Urgent { notice: Notice },
+    Reloaded { version: u64 },
+    ReloadRefused { by: String, reason: String },
+    WorkerRestarted { name: String, restarts: u32 },
+    WorkerFailed { name: String },
+    SubsystemStopped { name: String, took: Duration, met_deadline: bool },
+}
+```
+
+The kernel's record of what happened (urgent line tier T2), delivered synchronously to callbacks registered on `Foundation::events()` (registry-io's `SyncRegistry`). The registry declares and records; it never delivers urgent changes, which go through the urgent line first (D-006). A panicking callback is isolated by registry-io and does not stop the kernel.
+
+```rust,ignore
+let _guard = system.events().register_guard(|event: &Event| {
+    if let Event::WorkerFailed { name } = event {
+        page_on_call(name);
+    }
+});
+```
+
+## `lifecycle`
+
+**Since** 0.3 to 0.4 · feature `kernel`
+
+The phases of the system and the contract a subsystem follows to be started, stopped, checked, and reloaded in order. The kernel drives it; the application implements `Subsystem`.
+
+### `Phase` and `StopReason`
+
+**Since** 0.3 · SUI-27
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum Phase { Booting, Ready, Draining, Stopping, Stopped }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StopReason {
+    Signal { name: &'static str },      // "SIGTERM", "SIGINT", "CTRL_C", "CTRL_CLOSE", "SERVICE_STOP", ...
+    Requested { reason: &'static str }, // request_stop
+    WorkerFailed { name: String },      // a critical worker exhausted its restart budget
+    Supervisor { reason: String },      // the out-of-process watchdog (tower), when present
+}
+impl std::fmt::Display for StopReason;
+impl StopReason { pub fn exit_code(&self) -> u8; }   // 0, except WorkerFailed: 70
+```
+
+```text
+ Booting ─▶ Ready ─▶ Draining ─▶ Stopping ─▶ Stopped
+    │                    ▲
+    └── boot failure ────┘ (reverse shutdown of what started, then Stopped)
+```
+
+A reload never changes the phase. `Phase` values compare in lifecycle order (`phase >= Phase::Draining` means "going down").
+
+### `Deadline`
+
+**Since** 0.3
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Deadline { /* std::time::Instant */ }
+impl Deadline {
+    pub fn after(duration: Duration) -> Deadline;
+    pub fn instant(&self) -> std::time::Instant;
+    pub fn remaining(&self) -> Duration;        // zero once passed
+    pub fn is_past(&self) -> bool;
+}
+```
+
+The point in time by which a subsystem's `stop` (or a worker during shutdown) must return. Always the OS monotonic clock, never the `Builder::clock`, so a test clock cannot stall a shutdown.
+
+```rust
+use system_suite::lifecycle::Deadline;
+use std::time::Duration;
+
+let deadline = Deadline::after(Duration::from_millis(50));
+assert!(!deadline.is_past());
+assert!(deadline.remaining() <= Duration::from_millis(50));
+```
+
 ### `Subsystem`
 
 **Since** 0.4 · SUI-13
@@ -1102,7 +1210,8 @@ A part of the application that the kernel starts after the members and stops bef
 The trait needs `Send` (stop runs on a kernel thread) and not `Sync` (the kernel never calls it from two threads at once).
 
 ```rust,ignore
-use system_suite::kernel::{Deadline, Failure, Health, Link, Position, Subsystem};
+use system_suite::kernel::Health;
+use system_suite::lifecycle::{Deadline, Failure, Link, Position, Subsystem};
 
 struct HttpListener { listener: Option<std::net::TcpListener>, port: u16 }
 
@@ -1146,7 +1255,7 @@ impl Position {
 The declared start order (FR-8): lower starts first, equal positions start in registration order, and the stop order is always the exact reverse of the order in which subsystems actually started. Providers that others depend on go early, the door (anything that accepts outside work) at `LAST`.
 
 ```rust
-use system_suite::kernel::Position;
+use system_suite::lifecycle::Position;
 assert!(Position::FIRST < Position::DEFAULT && Position::DEFAULT < Position::LAST);
 let providers = Position::new(1_000);
 assert_eq!(providers.get(), 1_000);
@@ -1247,6 +1356,30 @@ fn reload(&mut self, config: &Config) -> Result<Commit, Failure> {
 }
 ```
 
+## `runtime`
+
+**Since** 0.4 · feature `kernel`
+
+Where background work runs: supervised worker threads and timers, without an async runtime and with zero CPU when idle. The kernel owns the runtime, asks it to stop at shutdown step 3, and reports its health.
+
+### `Runtime`
+
+**Since** 0.4 · SUI-14
+
+```rust,ignore
+#[derive(Clone)]
+pub struct Runtime { /* Arc: the worker supervisor and the timer wheel */ }
+impl Runtime {
+    pub fn every<F>(&self, name: &'static str, period: Duration, tick: F) -> Result<TimerHandle, Error>
+    where F: FnMut() + Send + 'static;
+    pub fn after<F>(&self, name: &'static str, delay: Duration, fire: F) -> Result<TimerHandle, Error>
+    where F: FnOnce() + Send + 'static;
+    pub fn workers(&self) -> Vec<WorkerHandle>;
+}
+```
+
+The handle to the runtime, from `Foundation::runtime()` (and `System::runtime()`, `Kernel::runtime()`, `Link::foundation().runtime()`). Cheap to clone, `Send + Sync`. Workers are spawned with [`Worker::spawn`](#workers-worker-workercontext-workerhandle), timers with `every` and `after`; `workers` lists the live workers for a dump or a status page.
+
 ### Workers: `Worker`, `WorkerContext`, `WorkerHandle`
 
 **Since** 0.4 · SUI-14
@@ -1262,7 +1395,7 @@ impl Worker {
     pub fn critical(self, on: bool) -> Self;                          // default false
     pub fn heartbeat(self, every: Duration) -> Self;                  // default none
     pub fn stack_size(self, bytes: usize) -> Self;                    // default: the platform's
-    pub fn spawn<F>(self, kernel: &Kernel, run: F) -> Result<WorkerHandle, Error>
+    pub fn spawn<F>(self, runtime: &Runtime, run: F) -> Result<WorkerHandle, Error>
     where
         F: FnMut(&WorkerContext) -> Result<(), Failure> + Send + 'static;
 }
@@ -1303,13 +1436,13 @@ A named thread the kernel supervises: the services' own housekeeping (log shippi
 Errors from `spawn`: `Setup` (invalid or duplicate name, zero budget window), `Stopping` (a stop was requested), `Kernel` (the OS refused the thread).
 
 ```rust,ignore
-use system_suite::kernel::{Backoff, Restart, Worker};
+use system_suite::runtime::{Backoff, Restart, Worker};
 
 let shipper = Worker::new("log-shipper")
     .restart(Restart::OnFailure)
     .backoff(Backoff::exponential(Duration::from_millis(200), Duration::from_secs(60)))
     .heartbeat(Duration::from_secs(10))
-    .spawn(system.kernel(), |cx| {
+    .spawn(system.runtime(), |cx| {
         while !cx.should_stop() {
             ship_pending_lines()?;               // a Failure: restarted after the backoff
             cx.heartbeat();
@@ -1321,7 +1454,7 @@ let shipper = Worker::new("log-shipper")
 
 ```rust,ignore
 // A queue consumer: zero CPU while the queue is empty.
-let consumer = Worker::new("jobs").critical(true).spawn(system.kernel(), move |cx| {
+let consumer = Worker::new("jobs").critical(true).spawn(system.runtime(), move |cx| {
     while !cx.should_stop() {
         match queue.pop() {
             Some(job) => job.run()?,
@@ -1355,7 +1488,7 @@ impl Backoff {
 `OnFailure` restarts after an `Err` or a panic; `Always` also after `Ok(())`; `Never` never. The backoff delay doubles from `min` to `max` with up to 25% random jitter (from mod-rand's process-unique generator when compiled in, a time-derived value otherwise), so many workers failing together do not restart together.
 
 ```rust
-use system_suite::kernel::Backoff;
+use system_suite::runtime::Backoff;
 use std::time::Duration;
 
 let b = Backoff::exponential(Duration::from_millis(100), Duration::from_secs(30));
@@ -1363,12 +1496,12 @@ assert!(b.delay(0) <= Duration::from_millis(125));
 assert!(b.delay(20) <= Duration::from_millis(37_500));
 ```
 
-### Timers: `Kernel::every`, `Kernel::after`, `TimerHandle`
+### Timers: `Runtime::every`, `Runtime::after`, `TimerHandle`
 
 **Since** 0.4 · SUI-14
 
 ```rust,ignore
-impl Kernel {
+impl Runtime {
     pub fn every<F>(&self, name: &'static str, period: Duration, tick: F) -> Result<TimerHandle, Error>
     where F: FnMut() + Send + 'static;
     pub fn after<F>(&self, name: &'static str, delay: Duration, fire: F) -> Result<TimerHandle, Error>
@@ -1391,112 +1524,14 @@ Errors: `Setup` (zero period, a period over 30 days), `Stopping`.
 Cost [est.]: arming or cancelling about 50 ns; a fire about 100 ns plus the callback.
 
 ```rust,ignore
-let flush = system.kernel().every("metrics-export", Duration::from_secs(15), || {
+let flush = system.runtime().every("metrics-export", Duration::from_secs(15), || {
     export_metrics();
 })?;
 let log = system.log().clone();
-let warn = system.kernel().after("slow-start-warning", Duration::from_secs(30), move || {
+let warn = system.runtime().after("slow-start-warning", Duration::from_secs(30), move || {
     system_suite::log::warn!(log, "warm-up is taking longer than expected");
 })?;
 warn.cancel();
-```
-
-### Health: `Health`, `Status`, `HealthReport`
-
-**Since** 0.4 · SUI-12
-
-```rust,ignore
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum Status { Healthy, Degraded, Unhealthy }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Health { /* status, optional reason */ }
-impl Health {
-    pub const HEALTHY: Health;
-    pub fn degraded(reason: impl Into<Cow<'static, str>>) -> Health;
-    pub fn unhealthy(reason: impl Into<Cow<'static, str>>) -> Health;
-    pub fn status(&self) -> Status;
-    pub fn reason(&self) -> Option<&str>;
-}
-
-#[derive(Clone, Debug)]
-pub struct HealthReport { /* status, phase, urgent level, components */ }
-impl HealthReport {
-    pub fn status(&self) -> Status;
-    pub fn phase(&self) -> Phase;
-    pub fn urgent(&self) -> Level;
-    pub fn ready(&self) -> bool;        // phase Ready and status not Unhealthy: a readiness probe
-    pub fn live(&self) -> bool;         // the kernel is running: a liveness probe
-    pub fn components(&self) -> &[ComponentHealth];
-    pub fn write_json(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result;
-    pub fn write_kv(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result;
-}
-impl std::fmt::Display for HealthReport;    // one line per component
-
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct ComponentHealth {
-    pub kind: Component,
-    pub name: Cow<'static, str>,
-    pub health: Health,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum Component { Member(Member), Subsystem, Worker, Timers }
-```
-
-Health aggregates every member, subsystem, worker, and the timer thread (FR-11). The aggregate is the worst component status, with one exception: a worker that is not `critical` can make the system at most `Degraded`. The report never contains a configuration value or a secret; reasons are the components' own words.
-
-When `NOTIFY_SOCKET` is set (systemd, Linux only), the kernel sends `READY=1` at boot step 17, `STATUS=<phase, status>` on every change, `WATCHDOG=1` at half of `WATCHDOG_USEC` while the status is not `Unhealthy` (so systemd restarts a wedged process), and `STOPPING=1` at shutdown step 1. It uses a std Unix datagram socket, no FFI. A heartbeat to the planned out-of-process watchdog (tower) is added when tower exists; the API above does not change.
-
-| Operation | Cost [est.] |
-|---|---|
-| `status()` | one `health()` call per subsystem, an atomic read per worker; no allocation (counting-allocator tested) |
-| `health()` | the same plus one `Vec` and the reasons |
-
-```rust,ignore
-// A health endpoint.
-let report = system.health();
-let mut body = String::with_capacity(512);
-report.write_json(&mut body)?;
-respond(if report.ready() { 200 } else { 503 }, "application/json", body);
-```
-
-```json
-{"status":"degraded","phase":"ready","urgent":"normal","components":[
- {"kind":"member","name":"log","status":"healthy"},
- {"kind":"subsystem","name":"db","status":"degraded","reason":"replica lag 12 s"},
- {"kind":"worker","name":"log-shipper","status":"healthy"}]}
-```
-
-### `Event`
-
-**Since** 0.5 · SUI-28 · feature `registry`
-
-```rust,ignore
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum Event {
-    Phase { from: Phase, to: Phase },
-    Urgent { notice: Notice },
-    Reloaded { version: u64 },
-    ReloadRefused { by: String, reason: String },
-    WorkerRestarted { name: String, restarts: u32 },
-    WorkerFailed { name: String },
-    SubsystemStopped { name: String, took: Duration, met_deadline: bool },
-}
-```
-
-The kernel's record of what happened (urgent line tier T2), delivered synchronously to callbacks registered on `Foundation::events()` (registry-io's `SyncRegistry`). The registry declares and records; it never delivers urgent changes, which go through the urgent line first (D-006). A panicking callback is isolated by registry-io and does not stop the kernel.
-
-```rust,ignore
-let _guard = system.events().register_guard(|event: &Event| {
-    if let Event::WorkerFailed { name } = event {
-        page_on_call(name);
-    }
-});
 ```
 
 ## `config`
@@ -1706,8 +1741,8 @@ The Windows service rows need a signal-mod release that is requested (D-014, [si
 | SUI-10 | `Builder` | 2 | 0.3 to 0.5 |
 | SUI-11 | `System::request_stop`, `System::reload` | 2 | 0.4 |
 | SUI-12 | `System::health`, `System::status`, `Health`, `Status`, `HealthReport` | 2 | 0.4 |
-| SUI-13 | `Subsystem`, `Position`, `Link`, `Mailbox`, `Failure`, `Commit` | 2 | 0.4 |
-| SUI-14 | `Worker`, `WorkerContext`, `WorkerHandle`, `Restart`, `Backoff`, timers | 2 | 0.4 |
+| SUI-13 | `lifecycle::{Subsystem, Position, Link, Mailbox, Failure, Commit}` | 2 | 0.4 |
+| SUI-14 | `runtime::{Runtime, Worker, WorkerContext, WorkerHandle, Restart, Backoff, TimerHandle}` | 2 | 0.4 |
 | SUI-15 | `config::Config`, `FromConfig`, `Secret` | 2 | 0.4 (`Secret` 0.5) |
 | SUI-16 | `exit` codes | 2 | 0.3 |
 | SUI-20 | `Foundation` | 3 | 0.3 |
@@ -1717,7 +1752,7 @@ The Windows service rows need a signal-mod release that is requested (D-014, [si
 | SUI-24 | member modules | 3 | as wired |
 | SUI-25 | `Builder::boot`, `Boot` | 3 | 0.4 |
 | SUI-26 | `System::wait_for_stop`, `System::shutdown` | 3 | 0.3 |
-| SUI-27 | `Kernel`, `Phase`, `StopReason`, `Deadline` | 3 | 0.3 |
+| SUI-27 | `kernel::Kernel`, `lifecycle::{Phase, StopReason, Deadline}` | 3 | 0.3 |
 | SUI-28 | `Event`, `Foundation::events` | 3 | 0.5 |
 | SUI-29 | `AuditLog` | 3 | 0.5 |
 | SUI-30 | `foundation()` | 3 | 0.5 |

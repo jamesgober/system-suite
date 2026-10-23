@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: scaffold (<code>0.1.0</code>), design lock in review.</strong> No functional code yet. The public API is written in <a href="./docs/API.md"><code>docs/API.md</code></a> and the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>; the design is in <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a> and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The first boot path ships in <code>0.3.0</code>.
+        <strong>Status: design lock (<code>0.2.0</code>).</strong> No functional code yet. The public API is written in <a href="./docs/API.md"><code>docs/API.md</code></a> and the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>; the design is in <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a> and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The first boot path ships in <code>0.3.0</code>.
     </blockquote>
 </div>
 

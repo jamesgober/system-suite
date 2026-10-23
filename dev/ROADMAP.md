@@ -15,14 +15,14 @@ Exit: CI green on every job; the crate published to claim the name.
 - [x] `dev/PLAN.md`, `dev/DIRECTIVES.md`, `dev/ROADMAP.md`.
 - [x] CI: Linux, macOS, Windows on x86_64 and aarch64, stable and 1.89; package; security job (audit, deny).
 
-## v0.2.0 - Design lock (WRITTEN, waiting for James)
+## v0.2.0 - Design lock (DONE, 2026-10-22)
 Exit: James approves `docs/API.md`; every open decision answered.
 - [x] `docs/API.md` written for every item in `PLAN.md` section 8 (signatures, errors, examples), each marked with the version it arrives in (2026-10-22; item ids SUI-01 to SUI-30).
 - [x] `docs/BOOT-ORDER.md` first version: both orders with the reason for every position (2026-10-22; the boot order was revised, D-012).
 - [x] Open decisions OD-1 to OD-6 answered by James or accepted as recommended, each recorded in the decision log: OD-1 (D-033), OD-2 (D-034), OD-3 (D-035) answered by James on 2026-10-22; OD-4 (D-016), OD-5 (D-015), OD-6 (D-014) decided. James also replaced the zero-dependency rule with judgement (D-032).
 - [x] Member requests filed in their repositories (`PLAN.md` section 12.2): sys-lib#2, signal-mod#4, log-io#1, log-io#2, path-lib#1, config-lib#4 (cleanup only), audit-trail#3. signal-mod#3 was withdrawn after D-032; no noml-core request is needed after D-034.
 - [x] One new defence idea recorded (`PLAN.md` section 18: the `.env` redirect check; the earlier 0.2 idea was adopted as D-020).
-- [ ] James approves `docs/API.md`.
+- [x] James approves `docs/API.md` (2026-10-22), after the kernel, lifecycle, and runtime were split into three modules (D-037).
 
 ## v0.3.0 - Core: the first boot path
 API: SUI-02, SUI-03, SUI-04 (build, instance, guard report, paths, env, log, clock, ids, kernel), SUI-05, SUI-06, SUI-10 (builder basics), SUI-16, SUI-20, SUI-23, SUI-24 for the wired members, SUI-26, SUI-27.
@@ -75,7 +75,8 @@ Exit: two real consumers boot on it on every listed environment.
 - [ ] API review against real use; changes made now, not after 1.0.
 
 ## v0.9.0 - Beta and release candidates
-Exit: two weeks without an API change; every document checked against the build.
+Exit: two weeks without an API change; every document checked against the build; James's review below done.
+- [ ] **James's pre-1.0 review**, before the API is frozen: the API, the workflow, and anything he wants added before 1.0. Whatever he adds goes into this roadmap (into 0.9 or a new milestone before 1.0) with its exit criteria; 1.0 waits for it.
 - [ ] API frozen; `0.9.x` only fixes.
 - [ ] `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.
 
