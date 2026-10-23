@@ -140,7 +140,8 @@ impl Error {
         self.0.member
     }
 
-    /// The subsystem's name, for kind [`ErrorKind::Subsystem`].
+    /// The subsystem's name, for a subsystem failure (subsystems arrive in
+    /// `0.4`).
     #[must_use]
     pub fn subsystem(&self) -> Option<&str> {
         self.0.subsystem.as_deref()

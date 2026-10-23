@@ -427,6 +427,105 @@ fn test_t3_files_are_not_readable_by_others() {
     drop(child.wait());
 }
 
+/// T3 on Windows: the log and lock directories carry a protected access
+/// control list for the current user, SYSTEM, and Administrators only.
+#[cfg(windows)]
+#[test]
+fn test_t3_directories_are_private_on_windows() {
+    let scenario = Scenario::new("it-acl");
+    let (mut child, logs) = scenario.spawn_ready("serve", |_| {});
+    for dir in [logs, scenario.dir("runtime")] {
+        let dacl = windows_acl::dacl_of(&dir);
+        assert!(dacl.starts_with("D:P"), "{} is not protected: {dacl}", dir.display());
+        assert_eq!(dacl.matches("(A;").count(), 3, "{}: {dacl}", dir.display());
+        for other in [";;;WD)", ";;;BU)", ";;;AU)", ";;;IU)"] {
+            assert!(!dacl.contains(other), "{other} in {dacl}");
+        }
+    }
+    drop(child.kill());
+    drop(child.wait());
+}
+
+/// Reads a directory's DACL back from the system, in SDDL form.
+#[cfg(windows)]
+mod windows_acl {
+    use std::{ffi::c_void, os::windows::ffi::OsStrExt as _, path::Path};
+
+    const SE_FILE_OBJECT: u32 = 1;
+    const DACL_SECURITY_INFORMATION: u32 = 4;
+    const SDDL_REVISION_1: u32 = 1;
+
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn GetNamedSecurityInfoW(
+            name: *const u16,
+            object: u32,
+            info: u32,
+            owner: *mut *mut c_void,
+            group: *mut *mut c_void,
+            dacl: *mut *mut c_void,
+            sacl: *mut *mut c_void,
+            descriptor: *mut *mut c_void,
+        ) -> u32;
+        fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor: *mut c_void,
+            revision: u32,
+            info: u32,
+            string: *mut *mut u16,
+            length: *mut u32,
+        ) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LocalFree(memory: *mut c_void) -> *mut c_void;
+    }
+
+    pub(super) fn dacl_of(path: &Path) -> String {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut descriptor: *mut c_void = std::ptr::null_mut();
+        let mut dacl: *mut c_void = std::ptr::null_mut();
+        // SAFETY: `wide` is NUL-terminated and every out-pointer is valid
+        // or null where the API allows it.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut dacl,
+                std::ptr::null_mut(),
+                &raw mut descriptor,
+            )
+        };
+        assert_eq!(status, 0, "GetNamedSecurityInfoW failed for {}", path.display());
+        let mut string: *mut u16 = std::ptr::null_mut();
+        let mut length = 0u32;
+        // SAFETY: `descriptor` came from the call above; the out-pointers
+        // are valid.
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &raw mut string,
+                &raw mut length,
+            )
+        };
+        assert_ne!(ok, 0);
+        // SAFETY: `string` holds `length` units, terminator included.
+        let units = unsafe { std::slice::from_raw_parts(string, length as usize) };
+        let text = String::from_utf16_lossy(units);
+        // SAFETY: both were allocated by the system with `LocalAlloc`.
+        unsafe {
+            LocalFree(string.cast::<c_void>());
+            LocalFree(descriptor);
+        }
+        text.trim_end_matches(char::from(0)).to_owned()
+    }
+}
+
 /// T5 and T9: a panic leaves the panic in the log and a crash report, and
 /// neither contains the secret.
 #[test]

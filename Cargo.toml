@@ -118,8 +118,9 @@ time-serde = ["time", "clock-lib/serde"]
 # clock-lib, and id-forge (all first-party, no third-party crates).
 sys-lib = { version = "0.3", optional = true }
 
-# Application directories and hardened joins. First-party, no dependencies.
-path-lib = { version = "1.0", optional = true }
+# Application directories and hardened joins; 1.1 for owner-only
+# directories on every OS (`ensure_private`). First-party, no dependencies.
+path-lib = { version = "1.1", optional = true }
 
 # The .env file and typed variables. First-party; brings path-lib.
 env-lib = { version = "1.0", optional = true }

@@ -444,6 +444,13 @@ fn step_guard(parts: &mut Parts) -> Result<(), Error> {
     let mut builder = Guard::builder(&parts.settings.name).lock(parts.settings.single_instance);
     #[cfg(feature = "paths")]
     if let Some(app) = &parts.app {
+        if parts.settings.single_instance {
+            // Owner-only on every OS before the guard takes the lock in it
+            // (threat T3); the guard checks it again.
+            let _dir = app
+                .ensure_private(path_lib::Kind::Runtime)
+                .map_err(|e| paths_error(&e).caused_by(e))?;
+        }
         builder = builder.lock_dir(app.dir(path_lib::Kind::Runtime));
     }
     if !parts.settings.process_wide {
@@ -509,8 +516,10 @@ fn step_directories(parts: &mut Parts) -> Result<(), Error> {
         return Ok(());
     }
     if let Some(app) = &parts.app {
+        // Owner-only on every OS: mode 0700 on Unix, a protected access
+        // control list on Windows (threat T3).
         let _created = app
-            .ensure(path_lib::Kind::Logs)
+            .ensure_private(path_lib::Kind::Logs)
             .map_err(|e| paths_error(&e).caused_by(e))?;
     }
     Ok(())

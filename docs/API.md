@@ -363,7 +363,7 @@ fn main() { system_suite::build::emit(); }
 ```rust,ignore
 let build = system_suite::build_info!();
 let system = system_suite::System::builder("site").build_info(build).start()?;
-assert_eq!(system.build().version, env!("CARGO_PKG_VERSION"));
+assert_eq!(system.build().map(|b| b.version), Some(env!("CARGO_PKG_VERSION")));
 ```
 
 ### `Member`
@@ -626,7 +626,7 @@ impl Builder {
 
 | Setting | Default | Notes |
 |---|---|---|
-| `build_info` | name and package version, other fields `"unknown"` | `start!` sets it; a missing value is logged once as a warning |
+| `build_info` | none: `Foundation::build()` returns `None` | `start!` sets it; a missing value is logged once as a warning (D-038) |
 | `scope` | `User` (overridden by `<NAME>_PATH_SCOPE`: `user`, `global`, `auto`) | `Global` for system services; directory overrides come from `<NAME>_<KIND>_DIR`; `Scope::Portable` needs `portable(root)` and is a `Setup` error without it |
 | `portable` | none | all directories under `root` (`root/data`, `root/config`, ...) |
 | `env_file` | `<config dir>/.env`, if it exists | an explicit file that does not exist is an error (`Environment`) |
@@ -658,7 +658,7 @@ let system = system_suite::System::builder("test-svc")
 impl Builder {
     pub fn disable(self, member: Member) -> Self;          // 0.3
     pub fn process_wide(self, on: bool) -> Self;           // 0.3; default true
-    pub fn crash_capture(self, on: bool) -> Self;          // 0.3, feature log; default true (D-016)
+    pub fn crash_capture(self, on: bool) -> Self;          // 0.3, feature kernel; default true (D-016)
     pub fn single_instance(self, on: bool) -> Self;        // 0.3, feature sys; default true
 }
 ```
@@ -782,7 +782,7 @@ The typed handles of every enabled member, built once at boot. It is what a fram
 | Method | Returns | Feature | Since |
 |---|---|---|---|
 | `name(&self)` | `&str` | any | 0.3 |
-| `build(&self)` | `&'static sys::BuildInfo` | `sys` | 0.3 |
+| `build(&self)` | `Option<&'static sys::BuildInfo>` (`None` when the builder was not given it, D-038) | `sys` | 0.3 |
 | `instance(&self)` | `&'static sys::Instance` | `sys` | 0.3 |
 | `guard_report(&self)` | `&sys::process::GuardReport` | `sys` | 0.3 |
 | `paths(&self)` | `&path::App` | `paths` | 0.3 |
