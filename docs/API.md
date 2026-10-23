@@ -128,10 +128,10 @@ Every member is behind its own feature, and every feature is additive: turning o
 |---|---|---|---|---|
 | `kernel` | yes | this crate: modules `kernel`, `lifecycle`, `runtime` | signals to decisions, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
 | `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
-| `paths` | yes | path-lib 1 | application and OS directories | none |
+| `paths` | yes | path-lib 1.1 | application and OS directories, owner-only where the suite writes | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
 | `config` | yes | config-lib 1, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
-| `log` | yes | log-io 2 | structured logging, the crash report's recent lines | none |
+| `log` | yes | log-io 2.1 | structured logging, the crash report's recent lines | none |
 | `metrics` | yes | metrics-lib 2 (no integrations) | counters, gauges, timers, histograms | none |
 | `signals` | yes | signal-mod 2, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
 | `time` | yes | clock-lib 1 | monotonic and wall clocks, a mockable `Clock` | none |
@@ -212,7 +212,7 @@ Linux, macOS, and Windows on x86_64 and aarch64, stable Rust and MSRV 1.89. Diff
 | stop signals | SIGTERM, SIGINT | same | Ctrl+C, Ctrl+Break, console close, logoff, system shutdown, service stop (D-014) |
 | reload signal | SIGHUP | same | service `PARAMCHANGE` control (D-014); otherwise `System::reload` only |
 | dump signal | SIGUSR1 | same | service user control code 128 (D-014) |
-| umask | `0o027` by the guard | same | not applicable; directories are owner-only through path-lib's ACL (request filed) |
+| umask | `0o027` by the guard | same | not applicable; the log and lock directories get a protected, owner-only access control list (path-lib 1.1) |
 | readiness | `sd_notify` when `NOTIFY_SOCKET` is set | none | the service control manager's `SERVICE_RUNNING` (D-014) |
 
 ## Tier 1
@@ -363,7 +363,7 @@ fn main() { system_suite::build::emit(); }
 ```rust,ignore
 let build = system_suite::build_info!();
 let system = system_suite::System::builder("site").build_info(build).start()?;
-assert_eq!(system.build().version, env!("CARGO_PKG_VERSION"));
+assert_eq!(system.build().map(|b| b.version), Some(env!("CARGO_PKG_VERSION")));
 ```
 
 ### `Member`
@@ -626,7 +626,7 @@ impl Builder {
 
 | Setting | Default | Notes |
 |---|---|---|
-| `build_info` | name and package version, other fields `"unknown"` | `start!` sets it; a missing value is logged once as a warning |
+| `build_info` | none: `Foundation::build()` returns `None` | `start!` sets it; a missing value is logged once as a warning (D-038) |
 | `scope` | `User` (overridden by `<NAME>_PATH_SCOPE`: `user`, `global`, `auto`) | `Global` for system services; directory overrides come from `<NAME>_<KIND>_DIR`; `Scope::Portable` needs `portable(root)` and is a `Setup` error without it |
 | `portable` | none | all directories under `root` (`root/data`, `root/config`, ...) |
 | `env_file` | `<config dir>/.env`, if it exists | an explicit file that does not exist is an error (`Environment`) |
@@ -658,7 +658,7 @@ let system = system_suite::System::builder("test-svc")
 impl Builder {
     pub fn disable(self, member: Member) -> Self;          // 0.3
     pub fn process_wide(self, on: bool) -> Self;           // 0.3; default true
-    pub fn crash_capture(self, on: bool) -> Self;          // 0.3, feature log; default true (D-016)
+    pub fn crash_capture(self, on: bool) -> Self;          // 0.3, feature kernel; default true (D-016)
     pub fn single_instance(self, on: bool) -> Self;        // 0.3, feature sys; default true
 }
 ```
@@ -782,7 +782,7 @@ The typed handles of every enabled member, built once at boot. It is what a fram
 | Method | Returns | Feature | Since |
 |---|---|---|---|
 | `name(&self)` | `&str` | any | 0.3 |
-| `build(&self)` | `&'static sys::BuildInfo` | `sys` | 0.3 |
+| `build(&self)` | `Option<&'static sys::BuildInfo>` (`None` when the builder was not given it, D-038) | `sys` | 0.3 |
 | `instance(&self)` | `&'static sys::Instance` | `sys` | 0.3 |
 | `guard_report(&self)` | `&sys::process::GuardReport` | `sys` | 0.3 |
 | `paths(&self)` | `&path::App` | `paths` | 0.3 |

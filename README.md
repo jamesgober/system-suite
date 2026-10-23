@@ -29,18 +29,26 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: design lock (<code>0.2.0</code>).</strong> No functional code yet. The public API is written in <a href="./docs/API.md"><code>docs/API.md</code></a> and the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>; the design is in <a href="./dev/PLAN.md"><code>dev/PLAN.md</code></a> and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>. The first boot path ships in <code>0.3.0</code>.
+        <strong>Status: first boot path (<code>0.3.0</code>).</strong> A service boots with one call, logs, parks with zero CPU, and stops in order on SIGTERM, SIGINT, or Ctrl+C. Configuration, metrics, the application's own subsystems, workers, and timers arrive in <code>0.4.0</code>; audit, registry, globals, randomness, and secrets in <code>0.5.0</code>. The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
 <hr>
 <br>
 
-## Scope
+## Quick start
 
-The shape of the Tier 1 API, arriving from `0.3.0`:
+```toml
+[dependencies]
+system-suite = "0.3"
+
+[build-dependencies]
+# Optional: the build commit and time in the first log line.
+system-suite = { version = "0.3", default-features = false, features = ["sys"] }
+```
 
 ```rust
+// src/main.rs
 fn main() -> std::process::ExitCode {
     let system = match system_suite::start!() {        // boots every enabled part, in order
         Ok(system) => system,
@@ -50,6 +58,19 @@ fn main() -> std::process::ExitCode {
     system.run()                                       // parks until a stop signal, then shuts down in order
 }
 ```
+
+```rust
+// build.rs (optional)
+fn main() {
+    system_suite::build::emit();
+}
+```
+
+`start!()` names the service after its package, takes the single-instance lock, opens the log (standard error and `<logs>/<name>.log`), installs the crash hook, and returns only when everything is up. A second copy exits with code 75; a boot failure prints what failed and what to do, and exits with a code that says why ([exit codes](./docs/API.md#exit-codes)). `run()` returns `0` after a clean stop.
+
+`System::builder("name")` sets the rest: the directory scope (`Scope::Global` for system services), a portable root, the `.env` file, a test clock, which members to disable, and the shutdown deadline.
+
+## Scope
 
 | Part | Library | Feature |
 |---|---|---|

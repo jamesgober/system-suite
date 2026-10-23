@@ -4,7 +4,7 @@
 >
 > **Read order:** [`../REPS.md`](../REPS.md), then [`DIRECTIVES.md`](./DIRECTIVES.md), then **this file**, then [`ROADMAP.md`](./ROADMAP.md).
 >
-> **Status:** `0.1.0` published. The `0.2.0` design lock is written ([`../docs/API.md`](../docs/API.md), [`../docs/BOOT-ORDER.md`](../docs/BOOT-ORDER.md)); every open decision is answered and James approved `docs/API.md` on 2026-10-22. `0.2.0` is the design lock release; `0.3.0` (the first boot path) is next, blocked on sys-lib 0.3.
+> **Status:** `0.1.0` published. The `0.2.0` design lock is written ([`../docs/API.md`](../docs/API.md), [`../docs/BOOT-ORDER.md`](../docs/BOOT-ORDER.md)); `0.3.0`, the first boot path, is published. `0.4.0` (configuration, metrics, subsystems, workers, timers) is next.
 
 ---
 
@@ -119,11 +119,11 @@ Versions checked on crates.io on 2026-10-22; public APIs read from source at the
 
 | Member | Feature | Crate | Published | Third-party runtime deps (as the suite uses it) | Status for the suite |
 |---|---|---|---|---|---|
-| System facts, boot kit | `sys` | sys-lib | 0.1.0 (API locked in its own 0.2 design, awaiting James) | none | **blocker for 0.3**: needs sys-lib 0.3 (build info, instance info, guard, `Error`) |
-| Paths | `paths` | path-lib | 1.0.0 | none | ready; Windows owner-only directories requested for T3 (blocker for the 0.3 T3 test on Windows) |
+| System facts, boot kit | `sys` | sys-lib | 0.3.0 | none | wired in suite 0.3 |
+| Paths | `paths` | path-lib | 1.1.0 | none | wired in suite 0.3; `ensure_private` (1.1) makes the log and lock directories owner-only on every OS |
 | Environment | `env` | env-lib | 1.0.0 | none (uses path-lib) | ready; the suite never calls `Env::export` (it is `unsafe`) |
 | Configuration | `config` | config-lib (OD-2, D-034) | 1.1.0 | thiserror, serde (unused), dashmap, arc-swap; `notify` is off (the suite reloads by signal) | ready; [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) is a cleanup, not a blocker |
-| Logging | `log` | log-io | 2.0.0 | none | needs a recent-lines ring and a file mode option (requested; blocker for 0.3 crash capture) |
+| Logging | `log` | log-io | 2.1.0 | none | wired in suite 0.3; `RecentLines` (2.1) feeds crash reports, `mode` (2.1) makes log files owner-only |
 | Metrics | `metrics` | metrics-lib | 2.0.0 | none with its integrations off | ready |
 | Signals | `signals` | signal-mod | 2.0.0 | signal-hook, libc (Unix), windows-sys (Windows), with `default-features = false, features = ["std", "agnostic"]` (no tokio) | ready (dependencies accepted, D-032); Windows service control for 0.5 |
 | Time | `time` | clock-lib | 1.1.0 (1.1.1 in progress) | none | ready |
@@ -405,12 +405,12 @@ Filed on 2026-10-22, after reading every member's public API at the design lock.
 
 | Member | Need | Needed by | Request |
 |---|---|---|---|
-| sys-lib | 0.3 boot kit (build info, instance info, guard, `is_elevated`, `Error`) as the suite uses it; `GuardBuilder::keep_open_files()` for `process_wide(false)` | suite 0.3 | [sys-lib#2](https://github.com/jamesgober/sys-lib/issues/2) |
+| sys-lib | 0.3 boot kit (build info, instance info, guard, `is_elevated`, `Error`) as the suite uses it; `keep_open_files()` turned out not to be needed (a target and minimum of 0 change nothing) | suite 0.3 | [sys-lib#2](https://github.com/jamesgober/sys-lib/issues/2) (done: sys-lib 0.3.0) |
 | signal-mod | ~~a runtime-free back-end with no third-party dependencies~~: withdrawn, its dependencies are accepted (D-032) | - | [signal-mod#3](https://github.com/jamesgober/signal-mod/issues/3) (closed) |
 | signal-mod | Windows service control: stop, shutdown, preshutdown, paramchange, a user code for the dump, status reporting (D-014, answers OD-6) | suite 0.5 | [signal-mod#4](https://github.com/jamesgober/signal-mod/issues/4) |
-| log-io | a bounded recent-lines sink for crash reports (it has none) | suite 0.3 | [log-io#1](https://github.com/jamesgober/log-io/issues/1) |
-| log-io | a file mode option for `FileSink` and `RotatingFile` (T3) | suite 0.3 | [log-io#2](https://github.com/jamesgober/log-io/issues/2) |
-| path-lib | owner-only directories on Windows (T3) | suite 0.3 | [path-lib#1](https://github.com/jamesgober/path-lib/issues/1) |
+| log-io | a bounded recent-lines sink for crash reports | suite 0.3 | [log-io#1](https://github.com/jamesgober/log-io/issues/1) (done: log-io 2.1.0, `sink::RecentLines`) |
+| log-io | a file mode option for `FileSink` and `RotatingFile` (T3) | suite 0.3 | [log-io#2](https://github.com/jamesgober/log-io/issues/2) (done: log-io 2.1.0, `mode`) |
+| path-lib | owner-only directories on Windows (T3) | suite 0.3 | [path-lib#1](https://github.com/jamesgober/path-lib/issues/1) (done: path-lib 1.1.0, `ensure_private` / `create_private`) |
 | config-lib | remove the unused `serde` and trim the rest where it is cheap; a cleanup, not a blocker (D-034) | when convenient | [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) |
 | audit-trail | resume a verified chain from a file, owner-only files, `sync`, a clock that never goes back | suite 0.5 | [audit-trail#3](https://github.com/jamesgober/audit-trail/issues/3) |
 | noml-core | none: OD-2 picked config-lib (D-034); NOML/TOML can come later through config-lib | - | not filed |
@@ -510,6 +510,7 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 - **Boot timeline:** record the duration of each boot step and expose it in health and the first log lines, so slow starts are visible without a profiler.
 - **Shutdown report:** at exit, one log line per subsystem with its stop duration and whether it met the deadline.
 - **Defence idea (0.2):** hypothesis: a configuration file that became world-writable since the last boot is a sign of tampering; method: the loader checks the file's permissions and owner before reading and refuses a group- or world-writable file unless explicitly allowed; expected cost: one `stat` at boot. **Adopted into the 0.4 design (D-020, `ErrorKind::ConfigInsecure`).**
+- **Defence idea (0.3):** hypothesis: someone with write access to the parent of the log or runtime directory can swap the directory for one they control between two boots, or loosen its permissions, and the service would keep writing its logs and lock there; method: at boot, after `ensure_private`, check that the existing log and runtime directories are still private (Unix: no group or other bits and owned by the process's user; Windows: a protected access control list naming only the user, `SYSTEM`, and `Administrators`) and refuse when they are not, unless allowed; expected cost: one `stat` or one access-control-list read per directory at boot, none at run time. Needs a read-back API in path-lib (a `check_private`).
 - **Defence idea (0.2, design lock):** hypothesis: whoever can write the application's `.env` file can redirect the whole configuration by setting `<NAME>_CONFIG` there, to a file they own; method: a `<NAME>_CONFIG` that came from the `.env` file (not from the process environment) must pass the same owner and permission check as the configuration file, the `.env` file itself is checked the same way before it is read, and a redirect is logged with where it came from; expected cost: two `stat` calls at boot, none at run time. Test: a group-writable `.env` that sets `<NAME>_CONFIG` is refused.
 
 ---
@@ -555,3 +556,11 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 | D-035 | 2026-10-22 | OD-3 (James): audit is opt-in; sha2 is the default hash, blake3 through `audit-blake3` | sha2 is not the concern (D-032); a chain file per run is, for tools and small services |
 | D-036 | 2026-10-22 | Member features are passed through as `<suite feature>-<member feature>` features (for example `metrics-http`, `log-tracing`, `config-json`), each checked against the dependency register; no pass-through brings an async runtime | a project gets a member's optional feature without a second dependency line; adding the member directly still works through Cargo's feature merging |
 | D-037 | 2026-10-22 | James: lifecycle and runtime are built here too, as the `lifecycle` and `runtime` modules beside `kernel` (one `kernel` feature for all three); `Runtime` is its own handle (`Foundation::runtime()`), and workers and timers moved off `Kernel` onto it | his foundation plan names kernel, runtime, and lifecycles as separate parts; one module per responsibility; separate crates wait for a consumer that needs them without the suite (the same rule as D-033); one feature because the kernel cannot run without the other two |
+| D-038 | 2026-10-23 | `Foundation::build()` returns `Option<&'static sys::BuildInfo>`: `None` when the builder was not given the build info | sys-lib's `BuildInfo` can only be built by `build_info!()` in the application crate; a stand-in built inside the suite would carry the suite's own name and version and mislabel every log line. `start!` always sets it |
+| D-039 | 2026-10-23 | `Builder::crash_capture` belongs to the `kernel` feature, not `log` | the hook is the kernel's and writes its report without a logger; with `log` it also logs and flushes the panic |
+| D-040 | 2026-10-23 | The `log-bridge` and `log-tracing` pass-through features wait: they bring `log`, `tracing-core`, and `tracing-subscriber`, which are not yet in the dependency register; `time-serde` (serde, in the register) ships in 0.3 | no third-party crate is added before its review is recorded and accepted (D-032) |
+| D-041 | 2026-10-23 | Logging before configuration exists (0.3): level info, standard error in human form on a terminal and JSON otherwise, JSON lines in `<logs>/<name>.log` rotated daily with 14 files kept, common secret keys redacted; `[log]` settings arrive with configuration in 0.4 | secure, useful defaults; one file per day for two weeks is a common retention |
+| D-042 | 2026-10-23 | SIGHUP and SIGUSR1 are received from 0.3 on: SIGHUP logs "nothing to reload" until configuration exists, SIGUSR1 logs the phase and the instance | the OS default for both is to kill the process; a service built on 0.3 must survive a `systemctl reload` or a stray dump request |
+| D-043 | 2026-10-23 | Boot and attack tests run each scenario in a child process (the test binary runs itself again), with every application directory pointed into a private temporary root | signals, the panic hook, the umask, and the lock are process-wide; a scenario must not see another's state or touch the user's own directories |
+| D-044 | 2026-10-23 | Threat T6 is tested in 0.3 at the mechanism level: the deadline runner abandons a step that never returns (used for the signal intake and the log flush). The subsystem-level attack test (a subsystem whose `stop` never returns) moves to 0.4 with subsystems | there is no subsystem to get stuck before 0.4; the mechanism the subsystems will use is the one tested now |
+| D-045 | 2026-10-23 | The member releases 0.3 needed were made in the members, as additive minor releases: path-lib 1.1.0 adds `ensure_private` and `create_private` (owner-only on every OS; Windows through a protected access control list set at creation) instead of changing `ensure`; log-io 2.1.0 adds `sink::RecentLines` and an opt-in `mode` on its file sinks, with the default unchanged | wiring, not features (D-002); changing what `ensure` does on Windows, or log-io's default file mode, would be a behavioural change, which those crates' stability contracts reserve for a major release |
