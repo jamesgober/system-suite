@@ -24,19 +24,19 @@ Exit: James approves `docs/API.md`; every open decision answered.
 - [x] One new defence idea recorded (`PLAN.md` section 18: the `.env` redirect check; the earlier 0.2 idea was adopted as D-020).
 - [x] James approves `docs/API.md` (2026-10-22), after the kernel, lifecycle, and runtime were split into three modules (D-037).
 
-## v0.3.0 - Core: the first boot path
+## v0.3.0 - Core: the first boot path (DONE, 2026-10-23)
 API: SUI-02, SUI-03, SUI-04 (build, instance, guard report, paths, env, log, clock, ids, kernel), SUI-05, SUI-06, SUI-10 (builder basics), SUI-16, SUI-20, SUI-23, SUI-24 for the wired members, SUI-26, SUI-27.
-Requires (blockers, recorded 2026-10-22):
-- sys-lib 0.3 (boot kit; [sys-lib#2](https://github.com/jamesgober/sys-lib/issues/2)). sys-lib's own 0.2 design lock is waiting for James.
-- log-io with a recent-lines sink ([log-io#1](https://github.com/jamesgober/log-io/issues/1)) and a file mode option ([log-io#2](https://github.com/jamesgober/log-io/issues/2)): crash capture and T3.
-- path-lib with owner-only directories on Windows ([path-lib#1](https://github.com/jamesgober/path-lib/issues/1)): the T3 attack test on Windows.
+Required member releases, all published 2026-10-23: sys-lib 0.3.0 (boot kit), path-lib 1.1.0 (owner-only directories, path-lib#1), log-io 2.1.0 (recent lines and file mode, log-io#1 and #2). signal-mod 2.0 is used as published (its dependencies accepted, D-032).
 Exit: a service boots with `start!`, logs, parks in `run`, and stops in order on SIGTERM and Ctrl+C on all three OSes; every boot step has a failure-injection test.
-- [ ] Boot steps 1 to 4, 6, 7, 9 to 11, 15, 17 (`docs/BOOT-ORDER.md`) and the kernel's lifecycle, signal translation (signal-mod), and shutdown with deadlines.
-- [ ] Members wired: sys-lib, path-lib, env-lib, log-io, clock-lib, id-forge, signal-mod.
-- [ ] `Error`, `ErrorKind`, exit codes, `Error::report`; `process_wide(false)` for tests.
-- [ ] Crash capture (panic hook, flush, crash report) with T5 and T9 tests.
-- [ ] Attack tests T1, T3, T4, T6, T8.
-- [ ] README quick start (Tier 1 first).
+- [x] Boot steps 1 to 4, 6, 7, 9 to 11, 15, 17 (`docs/BOOT-ORDER.md`) and the kernel's lifecycle, signal translation (signal-mod), and shutdown with deadlines.
+- [x] Members wired: sys-lib, path-lib, env-lib, log-io, clock-lib, id-forge, signal-mod.
+- [x] `Error`, `ErrorKind`, exit codes, `Error::report`; `process_wide(false)` for tests.
+- [x] Crash capture (panic hook, flush, crash report with the last 64 log lines) with T5 and T9 tests.
+- [x] Attack tests T1, T3 (Unix modes; Windows access control lists), T4 (every step that can fail, with real triggers, plus the unwinding driver), T8 (a stop at every step boundary).
+- [x] Stop signals: SIGTERM and SIGINT on Linux and macOS, Ctrl+Break on Windows (Ctrl+C cannot be sent to another process group; both arrive through the same console handler), each in a child process, in CI on all three OSes.
+- [x] README quick start (Tier 1 first).
+- Moved to 0.4 (D-044): the subsystem-level T6 attack test (a subsystem whose `stop` never returns). There are no subsystems before 0.4; the deadline runner they will use is tested in 0.3 (a step that never returns is abandoned, exit code 79).
+- Moved to 0.4 (D-040): the `log-bridge` and `log-tracing` pass-through features, which wait for `log`, `tracing-core`, and `tracing-subscriber` to be reviewed into the dependency register.
 
 ## v0.4.0 - Extended: configuration, metrics, kernel services
 API: SUI-04 (config, metrics), SUI-11, SUI-12, SUI-13, SUI-14, SUI-15 (without `Secret`), SUI-21, SUI-22, SUI-25.
@@ -47,6 +47,8 @@ Exit: configuration loads, validates, and reloads (T7); subsystems register and 
 - [ ] metrics-lib wired; kernel metrics (boot timeline, worker restarts).
 - [ ] Urgent line (T0, T1) with `loom` tests; `Subsystem` trait, `Position`, `Link`, `Mailbox`; `Boot`.
 - [ ] Workers with restart policies; timer wheel.
+- [ ] T6 at the subsystem level: a subsystem whose `stop` never returns is abandoned at the deadline, exit code 79 (moved from 0.3, D-044).
+- [ ] `log-bridge` and `log-tracing` pass-through features, once `log`, `tracing-core`, and `tracing-subscriber` are in the dependency register (moved from 0.3, D-040).
 - [ ] Health aggregation; `sd_notify` readiness; watchdog heartbeat.
 
 ## v0.5.0 - Feature complete

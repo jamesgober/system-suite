@@ -415,7 +415,7 @@ fn test_t3_files_are_not_readable_by_others() {
     let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&logs) & 0o077, 0, "log directory {:o}", mode(&logs));
     let log = logs.join("it-modes.log");
-    assert_eq!(mode(&log) & 0o037, 0, "log file {:o}", mode(&log));
+    assert_eq!(mode(&log) & 0o077, 0, "log file {:o}", mode(&log));
     let lock_dir = scenario.dir("runtime");
     assert_eq!(
         mode(&lock_dir) & 0o077,
@@ -436,7 +436,11 @@ fn test_t3_directories_are_private_on_windows() {
     let (mut child, logs) = scenario.spawn_ready("serve", |_| {});
     for dir in [logs, scenario.dir("runtime")] {
         let dacl = windows_acl::dacl_of(&dir);
-        assert!(dacl.starts_with("D:P"), "{} is not protected: {dacl}", dir.display());
+        assert!(
+            dacl.starts_with("D:P"),
+            "{} is not protected: {dacl}",
+            dir.display()
+        );
         assert_eq!(dacl.matches("(A;").count(), 3, "{}: {dacl}", dir.display());
         for other in [";;;WD)", ";;;BU)", ";;;AU)", ";;;IU)"] {
             assert!(!dacl.contains(other), "{other} in {dacl}");
@@ -499,7 +503,12 @@ mod windows_acl {
                 &raw mut descriptor,
             )
         };
-        assert_eq!(status, 0, "GetNamedSecurityInfoW failed for {}", path.display());
+        assert_eq!(
+            status,
+            0,
+            "GetNamedSecurityInfoW failed for {}",
+            path.display()
+        );
         let mut string: *mut u16 = std::ptr::null_mut();
         let mut length = 0u32;
         // SAFETY: `descriptor` came from the call above; the out-pointers
@@ -554,6 +563,12 @@ fn test_t5_t9_panic_leaves_a_report_without_secrets() {
         "{report}"
     );
     assert!(report.contains("instance: "), "{report}");
+    assert!(report.contains("recent log lines"), "{report}");
+    assert!(
+        report.contains("connecting"),
+        "the last lines are missing: {report}"
+    );
+    assert!(report.contains("[REDACTED]"), "{report}");
     assert!(
         !report.contains("hunter2"),
         "a secret reached the crash report:\n{report}"

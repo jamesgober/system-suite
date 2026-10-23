@@ -13,6 +13,57 @@
 
 ---
 
+## [0.3.0] - 2026-10-23
+
+The first boot path: a service boots with one call, logs, parks with zero
+CPU, and stops in order on a signal.
+
+### Added
+
+- `start!()` and `start!(name)`, `System::builder` and `Builder` (build info,
+  directory scope, portable root, `.env` file, test clock, `disable`,
+  `process_wide`, `crash_capture`, `single_instance`, `shutdown_deadline`),
+  `System::run`, `wait_for_stop`, `shutdown`, and the typed handles
+  (`build`, `instance`, `guard_report`, `paths`, `env`, `log`, `clock`,
+  `ids`, `kernel`) on `System` and `Foundation`.
+- The boot order of `docs/BOOT-ORDER.md`, steps 1 to 4, 6, 7, 9 to 11, 15,
+  and 17: a failing step stops the boot and unwinds what started; a stop
+  signal during boot is acted on at the next step boundary
+  (`ErrorKind::Interrupted`, exit code 0).
+- The shutdown order with a deadline (default 25 s); a step that does not
+  finish is abandoned and the exit code is 79.
+- `kernel::Kernel` (stop requests and waiting) and `lifecycle::{Phase,
+  StopReason, Deadline}`.
+- Signals through signal-mod's runtime-free back-end: SIGTERM, SIGINT, and
+  SIGQUIT stop; SIGHUP and SIGUSR1 are received without stopping; on
+  Windows Ctrl+C, Ctrl+Break, console close, logoff, and system shutdown
+  stop.
+- Crash capture: the panic is logged and flushed (with a bound), and an
+  owner-only crash report is written to the log directory with the build,
+  the instance, the panic, and the last 64 log lines (redacted by the
+  logger); at most 8 reports per process.
+- systemd readiness: `READY=1` when ready and `STOPPING=1` when the
+  shutdown starts, when `NOTIFY_SOCKET` is set.
+- `Error`, `ErrorKind`, `Error::report`, and the `exit` codes
+  (`sysexits.h` plus 79).
+- Member modules: `sys`, `path`, `env`, `log`, `signal`, `clock`, `id`, and
+  `build_info!` / `build::emit`; the `time-serde` pass-through feature.
+- Owner-only log and lock directories on every OS (path-lib 1.1), owner-only
+  log files (log-io 2.1), the umask set to `0o027` by the guard.
+- Tests: every boot step that can fail is made to fail with a real trigger
+  in a child process; the attack tests for T1 (a second copy), T3 (file and
+  directory permissions, including Windows access control lists), T5 and T9
+  (a panic leaves a report without secrets), T8 (a stop at every step
+  boundary), and the deadline runner behind T6.
+
+### Changed
+
+- `Foundation::build()` returns an `Option` (`None` when the builder was not
+  given the build info, D-038).
+- `Builder::crash_capture` belongs to the `kernel` feature (D-039).
+
+---
+
 ## [0.2.0] - 2026-10-22
 
 The design lock. No functional code yet.
@@ -78,6 +129,7 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jamesgober/system-suite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/system-suite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/system-suite/releases/tag/v0.1.0

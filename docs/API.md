@@ -128,10 +128,10 @@ Every member is behind its own feature, and every feature is additive: turning o
 |---|---|---|---|---|
 | `kernel` | yes | this crate: modules `kernel`, `lifecycle`, `runtime` | signals to decisions, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
 | `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
-| `paths` | yes | path-lib 1 | application and OS directories | none |
+| `paths` | yes | path-lib 1.1 | application and OS directories, owner-only where the suite writes | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
 | `config` | yes | config-lib 1, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
-| `log` | yes | log-io 2 | structured logging, the crash report's recent lines | none |
+| `log` | yes | log-io 2.1 | structured logging, the crash report's recent lines | none |
 | `metrics` | yes | metrics-lib 2 (no integrations) | counters, gauges, timers, histograms | none |
 | `signals` | yes | signal-mod 2, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
 | `time` | yes | clock-lib 1 | monotonic and wall clocks, a mockable `Clock` | none |
@@ -212,7 +212,7 @@ Linux, macOS, and Windows on x86_64 and aarch64, stable Rust and MSRV 1.89. Diff
 | stop signals | SIGTERM, SIGINT | same | Ctrl+C, Ctrl+Break, console close, logoff, system shutdown, service stop (D-014) |
 | reload signal | SIGHUP | same | service `PARAMCHANGE` control (D-014); otherwise `System::reload` only |
 | dump signal | SIGUSR1 | same | service user control code 128 (D-014) |
-| umask | `0o027` by the guard | same | not applicable; directories are owner-only through path-lib's ACL (request filed) |
+| umask | `0o027` by the guard | same | not applicable; the log and lock directories get a protected, owner-only access control list (path-lib 1.1) |
 | readiness | `sd_notify` when `NOTIFY_SOCKET` is set | none | the service control manager's `SERVICE_RUNNING` (D-014) |
 
 ## Tier 1

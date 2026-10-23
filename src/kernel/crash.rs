@@ -34,6 +34,8 @@ pub(crate) struct CrashSettings {
     pub(crate) dir: Option<PathBuf>,
     pub(crate) max_reports: u32,
     pub(crate) log: LogSlot,
+    #[cfg(feature = "log")]
+    pub(crate) recent: Option<Arc<crate::boot::RecentLog>>,
     #[cfg(feature = "sys")]
     pub(crate) build: Option<&'static sys_lib::BuildInfo>,
     #[cfg(feature = "sys")]
@@ -189,9 +191,10 @@ fn instance_label(_settings: &CrashSettings) -> String {
     std::process::id().to_string()
 }
 
-/// The report: only build and instance info, the panic message, its
-/// location, and its thread (threat T9). The application's own panic
-/// message is the one text it controls.
+/// The report: build and instance info, the panic message, its location,
+/// its thread, and the last log lines, already redacted by the logger
+/// (threat T9). The application's own panic message is the one text it
+/// controls.
 fn render(settings: &CrashSettings, message: &str, location: &str, thread_name: &str) -> String {
     let mut out = String::with_capacity(512);
     out.push_str("system-suite crash report\n");
@@ -201,8 +204,28 @@ fn render(settings: &CrashSettings, message: &str, location: &str, thread_name: 
     out.push_str(&format!("thread: {thread_name}\n"));
     out.push_str(&format!("location: {location}\n"));
     out.push_str(&format!("panic: {message}\n"));
+    recent_lines(settings, &mut out);
     out
 }
+
+/// The last log lines, read without waiting: if the panic happened while
+/// the ring was being written on this thread, the report says so instead
+/// of deadlocking.
+#[cfg(feature = "log")]
+fn recent_lines(settings: &CrashSettings, out: &mut String) {
+    let Some(recent) = settings.recent.as_ref() else {
+        return;
+    };
+    out.push_str("\nrecent log lines (oldest first):\n");
+    match recent.try_write_to(out) {
+        Ok(true) => {}
+        Ok(false) => out.push_str("(the log was being written when the panic happened)\n"),
+        Err(_) => out.push_str("(the recent lines could not be written)\n"),
+    }
+}
+
+#[cfg(not(feature = "log"))]
+fn recent_lines(_settings: &CrashSettings, _out: &mut String) {}
 
 #[cfg(feature = "sys")]
 fn describe_sys(settings: &CrashSettings, out: &mut String) {
@@ -251,6 +274,8 @@ mod tests {
             dir,
             max_reports: 2,
             log: LogSlot::default(),
+            #[cfg(feature = "log")]
+            recent: None,
             #[cfg(feature = "sys")]
             build: None,
             #[cfg(feature = "sys")]

@@ -26,6 +26,14 @@ use crate::{
     logging::{LogSlot, Val},
 };
 
+/// The ring of recent log lines the crash report ends with.
+#[cfg(feature = "log")]
+pub(crate) type RecentLog = log_io::sink::RecentLines<log_io::format::JsonFormat>;
+
+/// How many recent log lines a crash report carries.
+#[cfg(feature = "log")]
+const RECENT_LINES: usize = 64;
+
 /// A boot step.
 pub(crate) type StepFn = fn(&mut Parts) -> Result<(), Error>;
 
@@ -47,6 +55,8 @@ pub(crate) struct Parts {
     pub(crate) env: Option<env_lib::Env>,
     #[cfg(feature = "log")]
     pub(crate) logger: Option<log_io::Logger>,
+    #[cfg(feature = "log")]
+    pub(crate) recent: Option<std::sync::Arc<RecentLog>>,
     #[cfg(feature = "signals")]
     pub(crate) signals: Option<crate::kernel::signals::SignalIntake>,
     #[cfg(feature = "kernel")]
@@ -73,6 +83,8 @@ impl Parts {
             env: None,
             #[cfg(feature = "log")]
             logger: None,
+            #[cfg(feature = "log")]
+            recent: None,
             #[cfg(feature = "signals")]
             signals: None,
             #[cfg(feature = "kernel")]
@@ -526,8 +538,9 @@ fn step_directories(parts: &mut Parts) -> Result<(), Error> {
 }
 
 /// Step 10: the logger. Human-readable lines on a terminal and JSON
-/// otherwise on standard error, and JSON lines in `<logs>/<name>.log`
-/// rotated daily (14 files kept).
+/// otherwise on standard error, JSON lines in `<logs>/<name>.log` (owner
+/// only, rotated daily, 14 files kept), and the last 64 lines in memory for
+/// crash reports.
 #[cfg(feature = "log")]
 fn step_logging(parts: &mut Parts) -> Result<(), Error> {
     use std::io::IsTerminal as _;
@@ -538,10 +551,16 @@ fn step_logging(parts: &mut Parts) -> Result<(), Error> {
     let logger = if parts.settings.is_disabled(Member::Log) {
         Logger::builder().with_sink(NullSink::new()).build()
     } else {
+        let recent = std::sync::Arc::new(RecentLog::new(
+            RECENT_LINES,
+            log_io::format::JsonFormat::new(),
+        ));
+        parts.recent = Some(std::sync::Arc::clone(&recent));
         let mut builder = Logger::builder()
             .level(Level::Info)
             .default_target(name.clone())
-            .redact_common_secrets();
+            .redact_common_secrets()
+            .with_sink(recent);
         builder = if std::io::stderr().is_terminal() {
             builder.stderr_human()
         } else {
@@ -553,6 +572,7 @@ fn step_logging(parts: &mut Parts) -> Result<(), Error> {
             let file = log_io::sink::RotatingFile::builder(&path)
                 .rotation(log_io::sink::Rotation::Daily)
                 .max_files(14)
+                .mode(0o600)
                 .open()
                 .map_err(|e| {
                     Error::new(
@@ -640,6 +660,8 @@ fn step_crash_capture(parts: &mut Parts) -> Result<(), Error> {
         dir,
         max_reports: 8,
         log: parts.log.clone(),
+        #[cfg(feature = "log")]
+        recent: parts.recent.clone(),
         #[cfg(feature = "sys")]
         build: parts.settings.build,
         #[cfg(feature = "sys")]

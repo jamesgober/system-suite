@@ -117,7 +117,7 @@ A stop is requested by a stop signal, `System::request_stop`, a critical worker 
 | 7 | secrets | the vault is dropped, which wipes every secret | 0.5 |
 | 8 | signals | the signal intake is uninstalled; a further signal gets the operating system's default action | 0.3 |
 | 9 | logging | the shutdown report (one line per subsystem with its stop time and whether it met the deadline), the exit code, then flush and close | 0.3 |
-| 10 | `Stopped` | the phase becomes `Stopped`; `run` returns the exit code; the guard is dropped as `System` is dropped, releasing the lock | 0.3 |
+| 10 | `Stopped` | the phase becomes `Stopped`; the panic hook is removed (the previous one is put back); `run` returns the exit code; the guard is dropped, releasing the lock | 0.3 |
 
 ### Why each step is where it is
 
