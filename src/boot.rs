@@ -4,35 +4,37 @@
 //! them in order, stops at the first failure or at a stop request, and the
 //! same teardown that ends a running system then stops whatever started.
 
+#[cfg(feature = "kernel")]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(any(
+    feature = "kernel",
     feature = "env",
     feature = "log",
     feature = "sys",
     feature = "paths",
-    feature = "signals"
+    feature = "signals",
+    feature = "metrics",
+    feature = "config"
 ))]
 use crate::Member;
 #[cfg(feature = "kernel")]
-use crate::kernel::Kernel;
+use crate::kernel::{Kernel, Level};
 #[cfg(feature = "kernel")]
 use crate::lifecycle::Phase;
-#[cfg(any(feature = "log", feature = "signals"))]
+#[cfg(any(feature = "log", feature = "signals", feature = "kernel"))]
 use crate::shutdown::{Outcome, run_with_deadline};
 use crate::{
-    Error, ErrorKind, Step, System,
-    builder::{Settings, validate},
+    Error, ErrorKind, Foundation, Step,
+    builder::{DEFAULT_MEMBER_RESERVE, DEFAULT_SHUTDOWN_DEADLINE, Settings, validate},
     logging::{LogSlot, Val},
+    sections::Sections,
 };
 
 /// The ring of recent log lines the crash report ends with.
 #[cfg(feature = "log")]
 pub(crate) type RecentLog = log_io::sink::RecentLines<log_io::format::JsonFormat>;
-
-/// How many recent log lines a crash report carries.
-#[cfg(feature = "log")]
-const RECENT_LINES: usize = 64;
 
 /// A boot step.
 pub(crate) type StepFn = fn(&mut Parts) -> Result<(), Error>;
@@ -40,6 +42,7 @@ pub(crate) type StepFn = fn(&mut Parts) -> Result<(), Error>;
 /// Everything started so far. The teardown stops it in reverse.
 pub(crate) struct Parts {
     pub(crate) settings: Settings,
+    pub(crate) sections: Sections,
     pub(crate) log: LogSlot,
     pub(crate) began: Instant,
     timeline: Vec<(Step, Duration)>,
@@ -53,10 +56,18 @@ pub(crate) struct Parts {
     pub(crate) app: Option<path_lib::App>,
     #[cfg(feature = "env")]
     pub(crate) env: Option<env_lib::Env>,
+    #[cfg(feature = "config")]
+    pub(crate) config: Option<crate::Snapshot<crate::config::Config>>,
+    #[cfg(feature = "config")]
+    pub(crate) config_source: Option<crate::config::load::Source>,
+    #[cfg(all(feature = "kernel", feature = "config"))]
+    pub(crate) reloader: Option<Arc<crate::config::reload::Reloader>>,
     #[cfg(feature = "log")]
     pub(crate) logger: Option<log_io::Logger>,
     #[cfg(feature = "log")]
     pub(crate) recent: Option<std::sync::Arc<RecentLog>>,
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics: Option<crate::metrics_handle::MetricsRef>,
     #[cfg(feature = "signals")]
     pub(crate) signals: Option<crate::kernel::signals::SignalIntake>,
     #[cfg(feature = "kernel")]
@@ -68,6 +79,7 @@ impl Parts {
     pub(crate) fn new(settings: Settings) -> Parts {
         Parts {
             settings,
+            sections: Sections::default(),
             log: LogSlot::default(),
             began: Instant::now(),
             timeline: Vec::with_capacity(17),
@@ -81,10 +93,18 @@ impl Parts {
             app: None,
             #[cfg(feature = "env")]
             env: None,
+            #[cfg(feature = "config")]
+            config: None,
+            #[cfg(feature = "config")]
+            config_source: None,
+            #[cfg(all(feature = "kernel", feature = "config"))]
+            reloader: None,
             #[cfg(feature = "log")]
             logger: None,
             #[cfg(feature = "log")]
             recent: None,
+            #[cfg(feature = "metrics")]
+            metrics: None,
             #[cfg(feature = "signals")]
             signals: None,
             #[cfg(feature = "kernel")]
@@ -103,24 +123,88 @@ impl Parts {
         self.notified_ready = true;
     }
 
+    /// The suite's sections as currently in force (a reload may have
+    /// changed the live ones).
+    fn current_sections(&self) -> Sections {
+        #[cfg(all(feature = "kernel", feature = "config"))]
+        if let Some(reloader) = &self.reloader {
+            return reloader.sections();
+        }
+        self.sections.clone()
+    }
+
+    /// The shutdown deadline and member reserve: the builder's, else the
+    /// configuration's, else the defaults.
+    fn deadlines(&self) -> (Duration, Duration) {
+        let sections = self.current_sections();
+        let deadline = self
+            .settings
+            .shutdown_deadline
+            .or(sections.kernel.shutdown_deadline)
+            .unwrap_or(DEFAULT_SHUTDOWN_DEADLINE);
+        let reserve = self
+            .settings
+            .member_reserve
+            .or(sections.kernel.member_reserve)
+            .unwrap_or(DEFAULT_MEMBER_RESERVE)
+            .min(deadline / 2);
+        (deadline, reserve)
+    }
+
     /// Stops everything that started, in the shutdown order, within the
     /// shutdown deadline. Returns the exit code: `code`, or 79 if a step was
     /// abandoned at the deadline.
     pub(crate) fn teardown(&mut self, code: u8, cause: &str) -> u8 {
-        let deadline = Instant::now()
-            .checked_add(self.settings.shutdown_deadline)
-            .unwrap_or_else(Instant::now);
+        let (budget, reserve) = self.deadlines();
+        #[cfg(not(feature = "kernel"))]
+        let _no_subsystems = reserve;
+        let began = Instant::now();
+        let deadline = began.checked_add(budget).unwrap_or(began);
         let mut code = code;
+
+        // 1. Draining: every worker and subsystem learns of the stop at once.
         #[cfg(feature = "kernel")]
-        self.kernel.set_phase(Phase::Draining);
+        {
+            self.kernel.set_phase(Phase::Draining);
+            let _raised = self
+                .kernel
+                .urgent()
+                .raise(Level::Draining, "stop requested");
+        }
         if self.notified_ready {
             self.notify("STOPPING=1");
+            self.notify("STATUS=stopping");
         }
         self.log.info("stopping", &[("cause", Val::Str(cause))]);
-        // From 0.4: subsystems stop here, in reverse of their start order.
+
+        // 2. Subsystems, in reverse of their start order.
         #[cfg(feature = "kernel")]
-        self.kernel.set_phase(Phase::Stopping);
-        // From 0.4: the runtime's workers and timers stop here.
+        {
+            let subsystems_deadline = began
+                .checked_add(budget.saturating_sub(reserve))
+                .unwrap_or(began);
+            code = self.stop_subsystems(subsystems_deadline, code);
+        }
+
+        // 3. Stopping: workers and timers.
+        #[cfg(feature = "kernel")]
+        {
+            let _raised = self.kernel.urgent().raise(Level::Stopping, "stopping");
+            self.kernel.set_phase(Phase::Stopping);
+            let workers_deadline = began
+                .checked_add(budget.saturating_sub(reserve))
+                .unwrap_or(began)
+                .max(Instant::now());
+            for late in self.kernel.runtime().stop(workers_deadline) {
+                self.log.error(
+                    "worker did not stop by the deadline and was abandoned",
+                    &[("worker", Val::Str(&late))],
+                );
+                code = crate::exit::DEADLINE;
+            }
+        }
+
+        // 8. Signals: a further signal gets the operating system's default.
         #[cfg(feature = "signals")]
         if let Some(intake) = self.signals.take()
             && let Some(thread) = intake.uninstall()
@@ -132,15 +216,82 @@ impl Parts {
             });
             code = self.account("signals", outcome, code);
         }
+
+        // 9. Logging, last among the members.
         code = self.close_logging(deadline, code);
+
+        // 10. Stopped.
         #[cfg(feature = "kernel")]
-        self.kernel.set_phase(Phase::Stopped);
-        #[cfg(feature = "kernel")]
-        if let Some(crash) = self.crash.take() {
-            crash.uninstall();
+        {
+            self.kernel.set_phase(Phase::Stopped);
+            if let Some(crash) = self.crash.take() {
+                crash.uninstall();
+            }
         }
         #[cfg(feature = "sys")]
         drop(self.guard.take());
+        code
+    }
+
+    /// Shutdown step 2: every started subsystem, last started first, each
+    /// on a stop thread so the deadline holds (threat T6).
+    #[cfg(feature = "kernel")]
+    fn stop_subsystems(&self, deadline: Instant, mut code: u8) -> u8 {
+        while let Some(slot) = self.kernel.pop_slot() {
+            let name = slot.name.clone();
+            let stop_slot = Arc::clone(&slot);
+            let stop_deadline = crate::lifecycle::Deadline::at(deadline);
+            let result = Arc::new(std::sync::Mutex::new(None));
+            let result_slot = Arc::clone(&result);
+            let outcome = run_with_deadline(&format!("subsystem-{name}"), deadline, move || {
+                let stopped = stop_slot
+                    .subsystem
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .stop(stop_deadline);
+                *result_slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stopped);
+            });
+            match outcome {
+                Outcome::Done(took) => {
+                    let failure = result
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take()
+                        .and_then(Result::err);
+                    match failure {
+                        None => self.log.info(
+                            "subsystem stopped",
+                            &[
+                                ("subsystem", Val::Str(&name)),
+                                ("millis", Val::U64(millis(took))),
+                            ],
+                        ),
+                        Some(failure) => self.log.error(
+                            "subsystem stop failed",
+                            &[
+                                ("subsystem", Val::Str(&name)),
+                                ("error", Val::Str(failure.message())),
+                            ],
+                        ),
+                    }
+                }
+                Outcome::Panicked => {
+                    self.log.error(
+                        "subsystem panicked while stopping",
+                        &[("subsystem", Val::Str(&name))],
+                    );
+                }
+                Outcome::Abandoned => {
+                    self.log.error(
+                        "subsystem did not stop by the deadline and was abandoned",
+                        &[("subsystem", Val::Str(&name))],
+                    );
+                    code = crate::exit::DEADLINE;
+                }
+            }
+        }
         code
     }
 
@@ -168,15 +319,14 @@ impl Parts {
         let Some(logger) = self.logger.take() else {
             return code;
         };
-        let took = self.began.elapsed();
         self.log.info(
             "stopped",
             &[
                 ("exit_code", Val::U64(u64::from(code))),
-                ("uptime_ms", Val::U64(millis(took))),
+                ("uptime_ms", Val::U64(millis(self.began.elapsed()))),
             ],
         );
-        let outcome = run_with_deadline("logging", deadline, move || {
+        let outcome = run_with_deadline("logging", deadline.max(Instant::now()), move || {
             // Errors here can no longer be logged; the exit code reports a
             // missed deadline, and the sinks report their own write errors.
             drop(logger.flush());
@@ -194,9 +344,10 @@ impl Parts {
     }
 
     /// Sends a systemd notification when the system may touch process-wide
-    /// state; a failure is logged, never fatal.
+    /// state and `[kernel] notify` allows it; a failure is logged, never
+    /// fatal.
     pub(crate) fn notify(&self, state: &str) {
-        if !self.settings.process_wide {
+        if !self.settings.process_wide || !self.sections.kernel.notify {
             return;
         }
         #[cfg(feature = "kernel")]
@@ -213,6 +364,45 @@ impl Parts {
         let _no_kernel = state;
     }
 
+    /// Starts the systemd keep-alive when the service manager asked for one
+    /// (`WATCHDOG_USEC`, for this process): `WATCHDOG=1` at half the
+    /// interval while the system is not `Unhealthy`, so a wedged process
+    /// is restarted, and `STATUS=` when the status changes (D-030).
+    #[cfg(feature = "kernel")]
+    pub(crate) fn start_watchdog(&self) {
+        use crate::kernel::Status;
+
+        if !self.settings.process_wide || !self.sections.kernel.notify {
+            return;
+        }
+        let Some(period) = watchdog_period() else {
+            return;
+        };
+        let kernel = self.kernel.clone();
+        let mut last = Status::Healthy;
+        let started = self
+            .kernel
+            .runtime()
+            .every("systemd-watchdog", period, move || {
+                let status = kernel.status();
+                // A failed keep-alive is not logged: at this rate it would
+                // flood the log, and systemd reports the missed keep-alive.
+                if status != last {
+                    last = status;
+                    let _sent = crate::kernel::notify::notify(&format!("STATUS={}", status.name()));
+                }
+                if status != Status::Unhealthy {
+                    let _sent = crate::kernel::notify::notify("WATCHDOG=1");
+                }
+            });
+        if let Err(error) = started {
+            self.log.warn(
+                "the systemd keep-alive could not be started",
+                &[("error", Val::Str(&error.to_string()))],
+            );
+        }
+    }
+
     /// Writes the boot timeline: one line per step that ran.
     #[cfg(feature = "log")]
     fn log_timeline(&self) {
@@ -227,10 +417,57 @@ impl Parts {
             );
         }
     }
+
+    /// Fails the boot when a stop was requested (threat T8).
+    #[cfg(feature = "kernel")]
+    pub(crate) fn check_interrupted(&self, step: Step) -> Result<(), Error> {
+        match self.kernel.stop_reason() {
+            Some(reason) => Err(Error::new(
+                ErrorKind::Interrupted,
+                format!("{reason} arrived during boot; everything that started was stopped"),
+                "nothing: the stop was asked for",
+            )
+            .at(step)),
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    pub(crate) fn check_interrupted(&self, _step: Step) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Logs a failed boot and stops what started.
+    pub(crate) fn fail(&mut self, error: Error) -> Error {
+        if error.kind() != ErrorKind::Interrupted {
+            self.log.error(
+                "boot failed",
+                &[
+                    ("error", Val::Str(&error.to_string())),
+                    ("do", Val::Str(error.action())),
+                ],
+            );
+        }
+        let _code = self.teardown(error.kind().exit_value(), "boot failed");
+        let name = self.settings.name.clone();
+        error.for_app(&name)
+    }
 }
 
-#[cfg(feature = "log")]
-fn millis(duration: Duration) -> u64 {
+/// Half of `WATCHDOG_USEC` when it is set for this process (`WATCHDOG_PID`
+/// unset or ours).
+#[cfg(feature = "kernel")]
+fn watchdog_period() -> Option<Duration> {
+    let usec: u64 = std::env::var("WATCHDOG_USEC").ok()?.parse().ok()?;
+    if let Ok(pid) = std::env::var("WATCHDOG_PID")
+        && pid.parse::<u32>().ok() != Some(std::process::id())
+    {
+        return None;
+    }
+    Some(Duration::from_micros(usec / 2)).filter(|period| *period >= Duration::from_millis(1))
+}
+
+pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -243,33 +480,15 @@ fn micros(duration: Duration) -> u64 {
 /// request ends the boot with [`ErrorKind::Interrupted`] (threat T8).
 pub(crate) fn run_steps(parts: &mut Parts, steps: &[(Step, StepFn)]) -> Result<(), Error> {
     for &(step, run) in steps {
-        check_interrupted(parts, step)?;
+        parts.check_interrupted(step)?;
         let began = Instant::now();
         run(parts).map_err(|error| error.at(step))?;
         parts.timeline.push((step, began.elapsed()));
     }
-    check_interrupted(parts, Step::Ready)
+    parts.check_interrupted(Step::Kernel)
 }
 
-#[cfg(feature = "kernel")]
-fn check_interrupted(parts: &Parts, step: Step) -> Result<(), Error> {
-    match parts.kernel.stop_reason() {
-        Some(reason) => Err(Error::new(
-            ErrorKind::Interrupted,
-            format!("{reason} arrived during boot; everything that started was stopped"),
-            "nothing: the stop was asked for",
-        )
-        .at(step)),
-        None => Ok(()),
-    }
-}
-
-#[cfg(not(feature = "kernel"))]
-fn check_interrupted(_parts: &Parts, _step: Step) -> Result<(), Error> {
-    Ok(())
-}
-
-/// The boot steps compiled into this build, in order.
+/// The boot steps 1 to 15 compiled into this build, in order.
 pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     let mut steps: Vec<(Step, StepFn)> = Vec::with_capacity(17);
     steps.push((Step::BuildInfo, step_build_info));
@@ -279,6 +498,8 @@ pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     steps.push((Step::Paths, step_paths));
     #[cfg(feature = "env")]
     steps.push((Step::Environment, step_environment));
+    #[cfg(feature = "config")]
+    steps.push((Step::Configuration, step_configuration));
     #[cfg(feature = "sys")]
     steps.push((Step::Guard, step_guard));
     #[cfg(feature = "signals")]
@@ -289,33 +510,60 @@ pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     steps.push((Step::Logging, step_logging));
     #[cfg(feature = "kernel")]
     steps.push((Step::CrashCapture, step_crash_capture));
+    #[cfg(feature = "metrics")]
+    steps.push((Step::Metrics, step_metrics));
     #[cfg(feature = "kernel")]
     steps.push((Step::Kernel, step_kernel));
     steps
 }
 
-/// Boots a system from `settings`.
-pub(crate) fn start(settings: Settings) -> Result<System, Error> {
+/// Runs steps 1 to 15 and builds the foundation. On failure everything that
+/// started is stopped.
+pub(crate) fn foundation(settings: Settings) -> Result<(Parts, Foundation), Error> {
     let name = settings.name.clone();
     validate(&settings).map_err(|error| error.for_app(&name))?;
     let mut parts = Parts::new(settings);
-    match run_steps(&mut parts, &steps()) {
-        Ok(()) => System::ready(parts).map_err(|error| error.for_app(&name)),
-        Err(error) => {
-            let kind = error.kind();
-            if kind != ErrorKind::Interrupted {
-                parts.log.error(
-                    "boot failed",
-                    &[
-                        ("error", Val::Str(&error.to_string())),
-                        ("do", Val::Str(error.action())),
-                    ],
-                );
-            }
-            let _code = parts.teardown(error.kind().exit_value(), "boot failed");
-            Err(error.for_app(&name))
-        }
+    if let Err(error) = run_steps(&mut parts, &steps()) {
+        return Err(parts.fail(error));
     }
+    match crate::system::foundation_from(&mut parts) {
+        Ok(foundation) => Ok((parts, foundation)),
+        Err(error) => Err(parts.fail(error)),
+    }
+}
+
+/// Boots a system: every step, then ready.
+pub(crate) fn start(settings: Settings) -> Result<crate::System, Error> {
+    #[cfg(feature = "kernel")]
+    {
+        boot(settings)?.ready()
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        let (parts, foundation) = foundation(settings)?;
+        Ok(crate::System::ready(parts, foundation))
+    }
+}
+
+/// Runs steps 1 to 15 and returns a `Boot`.
+#[cfg(feature = "kernel")]
+pub(crate) fn boot(settings: Settings) -> Result<crate::Boot, Error> {
+    let (mut parts, foundation) = foundation(settings)?;
+    let registered = std::mem::take(
+        parts
+            .settings
+            .subsystems
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let on_ready = std::mem::take(
+        parts
+            .settings
+            .on_ready
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    Ok(crate::Boot::new(parts, foundation, registered, on_ready))
 }
 
 // ---------------------------------------------------------------------------
@@ -413,12 +661,15 @@ fn paths_error(error: &path_lib::Error) -> Error {
     .member_of(Member::Paths)
 }
 
-/// Step 4: the `.env` file, read. The process environment is never changed.
+/// Step 4: the `.env` file, checked and read. The process environment is
+/// never changed. A `.env` file another user can change is refused before
+/// it is read: it can redirect the whole configuration through
+/// `<NAME>_CONFIG` (the 0.2 design-lock defence idea).
 #[cfg(feature = "env")]
 fn step_environment(parts: &mut Parts) -> Result<(), Error> {
     let prefix = format!("{}_", env_prefix(&parts.settings.name));
-    let env = if parts.settings.is_disabled(Member::Env) {
-        Ok(env_lib::Env::new())
+    let path = if parts.settings.is_disabled(Member::Env) {
+        None
     } else if let Some(path) = &parts.settings.env_file {
         if !path.is_file() {
             return Err(Error::new(
@@ -428,12 +679,24 @@ fn step_environment(parts: &mut Parts) -> Result<(), Error> {
             )
             .member_of(Member::Env));
         }
-        env_lib::Env::open(path)
+        Some(path.clone())
     } else {
         match &parts.app {
-            Some(app) => env_lib::Env::for_app(app),
-            None => Ok(env_lib::Env::new()),
+            Some(app) => Some(
+                app.config_at(".env")
+                    .map_err(|e| paths_error(&e).caused_by(e))?,
+            ),
+            None => None,
         }
+    };
+    let env = match &path {
+        Some(path) => {
+            if path.is_file() {
+                crate::secure_file::check(path, "environment file")?;
+            }
+            env_lib::Env::open(path)
+        }
+        None => Ok(env_lib::Env::new()),
     };
     let env = env.and_then(|env| env.with_prefix(&prefix)).map_err(|e| {
         Error::new(
@@ -448,24 +711,118 @@ fn step_environment(parts: &mut Parts) -> Result<(), Error> {
     Ok(())
 }
 
+/// Step 5: the configuration: found, permission-checked, parsed, its
+/// suite sections validated. Secret references are refused until 0.5.
+#[cfg(feature = "config")]
+fn step_configuration(parts: &mut Parts) -> Result<(), Error> {
+    use crate::config::load::{self, Search, Source};
+
+    let prefix = env_prefix(&parts.settings.name);
+    let disabled = parts.settings.is_disabled(Member::Config);
+    #[cfg(feature = "env")]
+    let env_file_value = if std::env::var_os(format!("{prefix}_CONFIG")).is_none() {
+        parts
+            .env
+            .as_ref()
+            .and_then(|env| env.get("CONFIG").map(|value| value.into_owned()))
+    } else {
+        None
+    };
+    #[cfg(not(feature = "env"))]
+    let env_file_value = None;
+    #[cfg(feature = "sys")]
+    let elevated = sys_lib::process::is_elevated().ok();
+    #[cfg(not(feature = "sys"))]
+    let elevated = None;
+    let config_dir = parts
+        .app
+        .as_ref()
+        .map(|app| app.dir(path_lib::Kind::Config).to_path_buf());
+    let (source, origin) = if disabled {
+        (Source::Defaults, load::Origin::NotFound)
+    } else {
+        load::find(&Search {
+            name: &parts.settings.name,
+            prefix: &prefix,
+            explicit_file: parts.settings.config_file.as_deref(),
+            explicit_text: parts.settings.config_str.as_deref(),
+            env_file_value,
+            config_dir: config_dir.as_deref(),
+            elevated,
+        })?
+    };
+    let config = load::load(&source, 1)?;
+    let sections = crate::config::sections::read(&config)?;
+    let (deadline, reserve) = (
+        parts
+            .settings
+            .shutdown_deadline
+            .or(sections.kernel.shutdown_deadline)
+            .unwrap_or(DEFAULT_SHUTDOWN_DEADLINE),
+        parts
+            .settings
+            .member_reserve
+            .or(sections.kernel.member_reserve)
+            .unwrap_or(DEFAULT_MEMBER_RESERVE),
+    );
+    if deadline.is_zero() || deadline > crate::builder::MAX_SHUTDOWN_DEADLINE || reserve >= deadline
+    {
+        return Err(Error::new(
+            ErrorKind::ConfigInvalid,
+            "`kernel.shutdown_deadline` must be more than zero and at most one hour, and `kernel.member_reserve` shorter than it",
+            "fix the [kernel] section",
+        ));
+    }
+    parts.sections = sections;
+    parts.config = Some(crate::Snapshot::new(config));
+    parts.config_source = Some(source);
+    parts
+        .log
+        .info("configuration", &[("source", Val::Str(origin.describe()))]);
+    Ok(())
+}
+
 /// Step 6: the single-instance lock, the umask, and the open-file limit.
 #[cfg(feature = "sys")]
 fn step_guard(parts: &mut Parts) -> Result<(), Error> {
     use sys_lib::process::Guard;
 
-    let mut builder = Guard::builder(&parts.settings.name).lock(parts.settings.single_instance);
-    #[cfg(feature = "paths")]
-    if let Some(app) = &parts.app {
-        if parts.settings.single_instance {
-            // Owner-only on every OS before the guard takes the lock in it
-            // (threat T3); the guard checks it again.
-            let _dir = app
-                .ensure_private(path_lib::Kind::Runtime)
-                .map_err(|e| paths_error(&e).caused_by(e))?;
+    let section = parts.sections.guard.clone();
+    let lock = parts
+        .settings
+        .single_instance
+        .or(section.lock)
+        .unwrap_or(true);
+    let mut builder = Guard::builder(&parts.settings.name)
+        .lock(lock)
+        .allow_network_lock(section.allow_network_lock);
+    match &section.lock_dir {
+        Some(dir) => builder = builder.lock_dir(dir),
+        None => {
+            #[cfg(feature = "paths")]
+            if let Some(app) = &parts.app {
+                if lock {
+                    // Owner-only on every OS before the guard takes the lock
+                    // in it (threat T3); the guard checks it again.
+                    let _dir = app
+                        .ensure_private(path_lib::Kind::Runtime)
+                        .map_err(|e| paths_error(&e).caused_by(e))?;
+                }
+                builder = builder.lock_dir(app.dir(path_lib::Kind::Runtime));
+            }
         }
-        builder = builder.lock_dir(app.dir(path_lib::Kind::Runtime));
     }
-    if !parts.settings.process_wide {
+    if parts.settings.process_wide {
+        if let Some(mask) = section.umask {
+            builder = builder.umask(mask);
+        }
+        if let Some(target) = section.open_files_target {
+            builder = builder.open_files_target(target);
+        }
+        if let Some(minimum) = section.open_files_minimum {
+            builder = builder.open_files_minimum(minimum);
+        }
+    } else {
         // Leave the umask and the open-file limit alone: with a target and
         // minimum of zero the guard plans no change.
         builder = builder
@@ -507,17 +864,21 @@ fn step_signals(parts: &mut Parts) -> Result<(), Error> {
     if !parts.settings.process_wide || parts.settings.is_disabled(Member::Signals) {
         return Ok(());
     }
-    let intake =
-        crate::kernel::signals::SignalIntake::install(parts.kernel.clone(), parts.log.clone())?;
+    let intake = crate::kernel::signals::SignalIntake::install(
+        parts.kernel.clone(),
+        parts.log.clone(),
+        parts.sections.kernel.reload_signal,
+        parts.sections.kernel.dump_signal,
+    )?;
     parts.signals = Some(intake);
     Ok(())
 }
 
-/// Whether logs go to a file: logging is compiled in and enabled, and the
-/// application has directories.
+/// Whether logs go to a file: logging is compiled in and enabled, and
+/// `[log] file` allows it.
 #[cfg(feature = "paths")]
 fn logs_to_file(parts: &Parts) -> bool {
-    cfg!(feature = "log") && !parts.settings.is_disabled(Member::Log)
+    cfg!(feature = "log") && !parts.settings.is_disabled(Member::Log) && parts.sections.log.file
 }
 
 /// Step 9: the directories the enabled members write to, created
@@ -537,59 +898,98 @@ fn step_directories(parts: &mut Parts) -> Result<(), Error> {
     Ok(())
 }
 
-/// Step 10: the logger. Human-readable lines on a terminal and JSON
-/// otherwise on standard error, JSON lines in `<logs>/<name>.log` (owner
-/// only, rotated daily, 14 files kept), and the last 64 lines in memory for
-/// crash reports.
+/// Step 10: the logger, from `[log]` (D-041 for the defaults): standard
+/// error (human on a terminal, JSON otherwise), JSON lines in
+/// `<logs>/<name>.log` (owner only, rotated, 14 files kept), and the last
+/// lines in memory for crash reports.
 #[cfg(feature = "log")]
 fn step_logging(parts: &mut Parts) -> Result<(), Error> {
     use std::io::IsTerminal as _;
 
-    use log_io::{Level, Logger, sink::NullSink};
+    use log_io::{Logger, sink::NullSink};
+
+    #[cfg(feature = "paths")]
+    use crate::sections::LogRotation;
+    use crate::sections::{LogFormat, LogLevel};
 
     let name = parts.settings.name.clone();
+    let section = parts.sections.log.clone();
     let logger = if parts.settings.is_disabled(Member::Log) {
         Logger::builder().with_sink(NullSink::new()).build()
     } else {
-        let recent = std::sync::Arc::new(RecentLog::new(
-            RECENT_LINES,
-            log_io::format::JsonFormat::new(),
-        ));
-        parts.recent = Some(std::sync::Arc::clone(&recent));
-        let mut builder = Logger::builder()
-            .level(Level::Info)
-            .default_target(name.clone())
-            .redact_common_secrets()
-            .with_sink(recent);
-        builder = if std::io::stderr().is_terminal() {
-            builder.stderr_human()
-        } else {
-            builder.stderr_json()
+        let level = match section.level {
+            LogLevel::Trace => log_io::Level::Trace,
+            LogLevel::Debug => log_io::Level::Debug,
+            LogLevel::Info => log_io::Level::Info,
+            LogLevel::Warn => log_io::Level::Warn,
+            LogLevel::Error => log_io::Level::Error,
         };
+        let mut builder = Logger::builder().level(level).default_target(name.clone());
+        if let Some(filter) = &section.filter {
+            builder = builder.try_filter_directive(filter).map_err(|e| {
+                Error::new(
+                    ErrorKind::ConfigInvalid,
+                    format!("`log.filter` is not a valid filter: {e}"),
+                    "fix `log.filter`, for example \"info,db=debug\"",
+                )
+            })?;
+        }
+        if section.redact_common {
+            builder = builder.redact_common_secrets();
+        }
+        for key in &section.redact {
+            builder = builder.redact_key(key.clone());
+        }
+        if section.recent_lines > 0 {
+            let recent = std::sync::Arc::new(RecentLog::new(
+                section.recent_lines,
+                log_io::format::JsonFormat::new(),
+            ));
+            parts.recent = Some(std::sync::Arc::clone(&recent));
+            builder = builder.with_sink(recent);
+        }
+        if section.stderr {
+            builder = match section.format {
+                LogFormat::Human => builder.stderr_human(),
+                LogFormat::Json => builder.stderr_json(),
+                LogFormat::Logfmt => builder.stderr_logfmt(),
+                LogFormat::Auto if std::io::stderr().is_terminal() => builder.stderr_human(),
+                LogFormat::Auto => builder.stderr_json(),
+            };
+        }
         #[cfg(feature = "paths")]
-        if let Some(app) = &parts.app {
+        if logs_to_file(parts)
+            && let Some(app) = &parts.app
+        {
             let path = app.dir(path_lib::Kind::Logs).join(format!("{name}.log"));
-            let file = log_io::sink::RotatingFile::builder(&path)
-                .rotation(log_io::sink::Rotation::Daily)
-                .max_files(14)
-                .mode(0o600)
-                .open()
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::Logging,
-                        format!("the log file {} cannot be opened: {e}", path.display()),
-                        "check that the log directory is writable and that the path is not a directory",
-                    )
-                    .member_of(Member::Log)
-                    .caused_by(e)
-                })?;
+            let rotation = match section.rotation {
+                LogRotation::Never => log_io::sink::Rotation::Never,
+                LogRotation::Hourly => log_io::sink::Rotation::Hourly,
+                LogRotation::Daily => log_io::sink::Rotation::Daily,
+            };
+            let mut file = log_io::sink::RotatingFile::builder(&path)
+                .rotation(rotation)
+                .max_files(section.max_files)
+                .mode(0o600);
+            if let Some(bytes) = section.max_bytes {
+                file = file.max_bytes(bytes);
+            }
+            let file = file.open().map_err(|e| {
+                Error::new(
+                    ErrorKind::Logging,
+                    format!("the log file {} cannot be opened: {e}", path.display()),
+                    "check that the log directory is writable and that the path is not a directory",
+                )
+                .member_of(Member::Log)
+                .caused_by(e)
+            })?;
             builder = builder.writer(file, log_io::format::JsonFormat::new());
         }
         builder.try_build().map_err(|e| {
             Error::new(
                 ErrorKind::Logging,
                 format!("the logger cannot be built: {e}"),
-                "report this: the suite's own logger settings are invalid",
+                "turn on at least one sink: [log] stderr or file",
             )
             .member_of(Member::Log)
             .caused_by(e)
@@ -617,7 +1017,9 @@ fn first_lines(parts: &Parts) {
     #[cfg(feature = "sys")]
     {
         match parts.settings.build {
-            Some(build) => parts.log.info("build", &[("build", Val::Str(&build.to_string()))]),
+            Some(build) => parts
+                .log
+                .info("build", &[("build", Val::Str(&build.to_string()))]),
             None => parts.log.warn(
                 "build info not recorded: start with start!() or Builder::build_info(build_info!())",
                 &[],
@@ -644,7 +1046,12 @@ fn first_lines(parts: &Parts) {
 fn step_crash_capture(parts: &mut Parts) -> Result<(), Error> {
     use crate::kernel::crash::{CrashHook, CrashSettings};
 
-    if !parts.settings.process_wide || !parts.settings.crash_capture {
+    let enabled = parts
+        .settings
+        .crash_capture
+        .or(parts.sections.crash.enabled)
+        .unwrap_or(true);
+    if !parts.settings.process_wide || !enabled {
         return Ok(());
     }
     #[cfg(feature = "paths")]
@@ -658,7 +1065,7 @@ fn step_crash_capture(parts: &mut Parts) -> Result<(), Error> {
     parts.crash = Some(CrashHook::install(CrashSettings {
         app: parts.settings.name.clone(),
         dir,
-        max_reports: 8,
+        max_reports: parts.sections.crash.max_reports,
         log: parts.log.clone(),
         #[cfg(feature = "log")]
         recent: parts.recent.clone(),
@@ -670,10 +1077,101 @@ fn step_crash_capture(parts: &mut Parts) -> Result<(), Error> {
     Ok(())
 }
 
-/// Step 15: the kernel. Its runtime (workers, timers) starts here from 0.4.
-#[cfg(feature = "kernel")]
-fn step_kernel(_parts: &mut Parts) -> Result<(), Error> {
+/// Step 12: the metrics registry: metrics-lib's global one when the system
+/// may touch process-wide state (its macros record into it), else the
+/// system's own.
+#[cfg(feature = "metrics")]
+fn step_metrics(parts: &mut Parts) -> Result<(), Error> {
+    use crate::metrics_handle::MetricsRef;
+
+    let section = parts.sections.metrics;
+    if parts.settings.is_disabled(Member::Metrics) || !section.enabled {
+        parts.metrics = Some(MetricsRef::Owned(std::sync::Arc::new(
+            metrics_lib::MetricsCore::new(),
+        )));
+        return Ok(());
+    }
+    let config = metrics_lib::MetricsConfig::default().with_max_series(section.max_series);
+    let metrics_error = |e: metrics_lib::MetricsError| {
+        Error::new(
+            ErrorKind::Metrics,
+            format!("the metrics registry refused its settings: {e}"),
+            "fix the [metrics] section",
+        )
+        .member_of(Member::Metrics)
+        .caused_by(e)
+    };
+    let core = if parts.settings.process_wide {
+        match metrics_lib::init_with_config(config) {
+            Ok(core) => MetricsRef::Global(core),
+            Err(metrics_lib::MetricsError::AlreadyInitialized) => {
+                match metrics_lib::try_metrics() {
+                    Some(core) => {
+                        parts.log.warn(
+                        "metrics-lib's global registry was already set up; its settings were kept",
+                        &[],
+                    );
+                        MetricsRef::Global(core)
+                    }
+                    None => {
+                        return Err(metrics_error(metrics_lib::MetricsError::AlreadyInitialized));
+                    }
+                }
+            }
+            Err(e) => return Err(metrics_error(e)),
+        }
+    } else {
+        MetricsRef::Owned(std::sync::Arc::new(
+            metrics_lib::MetricsCore::with_config(config).map_err(metrics_error)?,
+        ))
+    };
+    parts.metrics = Some(core);
     Ok(())
+}
+
+/// Step 15: the kernel: connected to the log and metrics, the reloader set
+/// up. Its runtime starts its threads on first use.
+#[cfg(feature = "kernel")]
+fn step_kernel(parts: &mut Parts) -> Result<(), Error> {
+    let members: Vec<Member> = enabled_members(parts);
+    #[cfg(feature = "metrics")]
+    let metrics = match &parts.metrics {
+        Some(core) => crate::kernel::metrics::KernelMetrics::new(core.clone()),
+        None => crate::kernel::metrics::KernelMetrics::none(),
+    };
+    #[cfg(not(feature = "metrics"))]
+    let metrics = crate::kernel::metrics::KernelMetrics::none();
+    parts.kernel.wire(members, parts.log.clone(), metrics);
+    #[cfg(feature = "config")]
+    if let (Some(snapshot), Some(source)) = (&parts.config, &parts.config_source) {
+        parts.reloader = Some(Arc::new(crate::config::reload::Reloader::new(
+            source.clone(),
+            snapshot.clone(),
+            parts.sections.clone(),
+            parts.kernel.clone(),
+            parts.log.clone(),
+        )));
+    }
+    Ok(())
+}
+
+/// The members compiled in and not disabled, for health reports.
+#[cfg(feature = "kernel")]
+fn enabled_members(parts: &Parts) -> Vec<Member> {
+    [
+        Member::Sys,
+        Member::Paths,
+        Member::Env,
+        Member::Config,
+        Member::Log,
+        Member::Metrics,
+        Member::Signals,
+        Member::Time,
+        Member::Ids,
+    ]
+    .into_iter()
+    .filter(|m| m.is_compiled() && !parts.settings.disabled.contains(m))
+    .collect()
 }
 
 #[cfg(test)]
@@ -714,8 +1212,10 @@ mod tests {
             Step::BuildInfo,
             Step::Instance,
             Step::Paths,
+            Step::Configuration,
             Step::Guard,
             Step::Logging,
+            Step::Metrics,
         ];
         for failing in 0..order.len() {
             let mut parts = parts();
@@ -804,5 +1304,13 @@ mod tests {
         let steps = steps();
         assert!(steps.windows(2).all(|pair| pair[0].0 < pair[1].0));
         assert_eq!(steps.first().map(|s| s.0), Some(Step::BuildInfo));
+    }
+
+    #[test]
+    fn test_deadlines_default_and_reserve_is_capped() {
+        let parts = parts();
+        let (deadline, reserve) = parts.deadlines();
+        assert_eq!(deadline, DEFAULT_SHUTDOWN_DEADLINE);
+        assert_eq!(reserve, DEFAULT_MEMBER_RESERVE);
     }
 }

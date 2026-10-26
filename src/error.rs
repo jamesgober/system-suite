@@ -88,29 +88,35 @@ impl Error {
     }
 
     /// Records the member the error came from.
-    #[cfg(any(
-        feature = "env",
-        feature = "log",
-        feature = "paths",
-        feature = "signals",
-        feature = "sys"
-    ))]
+    // Unused only when every member is compiled out.
+    #[cfg_attr(
+        not(any(
+            feature = "sys",
+            feature = "paths",
+            feature = "env",
+            feature = "log",
+            feature = "signals",
+            feature = "metrics"
+        )),
+        allow(dead_code)
+    )]
     pub(crate) fn member_of(mut self, member: Member) -> Self {
         self.0.member = Some(member);
         self
     }
 
     /// Keeps the member's own error as the source.
-    #[cfg(any(
-        test,
-        feature = "env",
-        feature = "log",
-        feature = "paths",
-        feature = "signals",
-        feature = "sys"
-    ))]
+    // Unused only when every member is compiled out.
+    #[cfg_attr(not(feature = "kernel"), allow(dead_code))]
     pub(crate) fn caused_by(mut self, source: impl StdError + Send + Sync + 'static) -> Self {
         self.0.source = Some(Box::new(source));
+        self
+    }
+
+    /// Records the subsystem the error came from.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn in_subsystem(mut self, name: &str) -> Self {
+        self.0.subsystem = Some(name.to_owned());
         self
     }
 
@@ -140,8 +146,8 @@ impl Error {
         self.0.member
     }
 
-    /// The subsystem's name, for a subsystem failure (subsystems arrive in
-    /// `0.4`).
+    /// The subsystem's name, for kinds [`ErrorKind::Subsystem`] and
+    /// [`ErrorKind::ReloadRefused`].
     #[must_use]
     pub fn subsystem(&self) -> Option<&str> {
         self.0.subsystem.as_deref()
@@ -281,6 +287,41 @@ pub enum ErrorKind {
     /// An I/O error not covered above. The message names the operation and
     /// the file. Exit code 74.
     Io,
+    /// An explicit configuration file (builder or `<NAME>_CONFIG`) does not
+    /// exist. Create it, or fix the path. Exit code 78.
+    ConfigNotFound,
+    /// The configuration file (or the `.env` file) can be changed by another
+    /// user: group- or world-writable, or owned by someone other than the
+    /// service's user or root (D-020). `chmod 640` and `chown` it. Exit code
+    /// 77.
+    ConfigInsecure,
+    /// The configuration does not parse, a suite section has an unknown key
+    /// or an invalid value, or a value read later has the wrong type. The
+    /// message names the file, the position or key, and the accepted values.
+    /// Exit code 78.
+    ConfigInvalid,
+    /// A secret reference (`env:`, `file:`, `vault:`) cannot be resolved; in
+    /// this version every reference is refused (the secrets feature arrives
+    /// in 0.5, D-031). The message names the key, never the value. Exit code
+    /// 78.
+    Secret,
+    /// The metrics registry rejected its configuration. The message names
+    /// the key. Exit code 70.
+    Metrics,
+    /// A subsystem's `start` or an `on_ready` callback failed or panicked.
+    /// The message carries the subsystem's name and its `Failure`. Exit code
+    /// 70.
+    Subsystem,
+    /// The kernel no longer accepts the request (a worker, timer, or reload
+    /// after a stop was requested). Stop scheduling work. Exit code 70.
+    Stopping,
+    /// A subsystem refused the new configuration; nothing changed. The
+    /// message names who refused and why. Exit code 78.
+    ReloadRefused,
+    /// An urgent-line change that is not allowed: `Draining` or `Stopping`
+    /// set directly, or any change after a stop. Use a stop request. Exit
+    /// code 70.
+    UrgentRefused,
 }
 
 impl ErrorKind {
@@ -296,6 +337,15 @@ impl ErrorKind {
             ErrorKind::Signals | ErrorKind::Kernel => exit::SOFTWARE,
             ErrorKind::Interrupted => exit::OK,
             ErrorKind::Io => exit::IOERR,
+            ErrorKind::ConfigNotFound
+            | ErrorKind::ConfigInvalid
+            | ErrorKind::Secret
+            | ErrorKind::ReloadRefused => exit::CONFIG,
+            ErrorKind::ConfigInsecure => exit::NOPERM,
+            ErrorKind::Metrics
+            | ErrorKind::Subsystem
+            | ErrorKind::Stopping
+            | ErrorKind::UrgentRefused => exit::SOFTWARE,
         }
     }
 }
@@ -367,6 +417,15 @@ mod tests {
         assert_eq!(ErrorKind::Kernel.exit_value(), 70);
         assert_eq!(ErrorKind::Interrupted.exit_value(), 0);
         assert_eq!(ErrorKind::Io.exit_value(), 74);
+        assert_eq!(ErrorKind::ConfigNotFound.exit_value(), 78);
+        assert_eq!(ErrorKind::ConfigInsecure.exit_value(), 77);
+        assert_eq!(ErrorKind::ConfigInvalid.exit_value(), 78);
+        assert_eq!(ErrorKind::Secret.exit_value(), 78);
+        assert_eq!(ErrorKind::ReloadRefused.exit_value(), 78);
+        assert_eq!(ErrorKind::Subsystem.exit_value(), 70);
+        assert_eq!(ErrorKind::Stopping.exit_value(), 70);
+        assert_eq!(ErrorKind::UrgentRefused.exit_value(), 70);
+        assert_eq!(ErrorKind::Metrics.exit_value(), 70);
     }
 
     #[test]

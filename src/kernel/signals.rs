@@ -21,17 +21,36 @@ use crate::{
 /// Writes the state dump requested by the dump signal.
 pub(crate) type Dump = Box<dyn Fn() + Send + Sync + 'static>;
 
+/// Reloads the configuration on the reload signal.
+pub(crate) type Reload = Box<dyn Fn() + Send + Sync + 'static>;
+
+/// What the reload and dump signals do. Set once the system is ready.
+#[derive(Default)]
+pub(crate) struct Actions {
+    dump: OnceLock<Dump>,
+    reload: OnceLock<Reload>,
+    dump_on: bool,
+    reload_on: bool,
+}
+
 /// The installed intake: the coordinator and its thread.
 pub(crate) struct SignalIntake {
     coordinator: Coordinator,
     thread: Option<JoinHandle<()>>,
-    dump: Arc<OnceLock<Dump>>,
+    actions: Arc<Actions>,
 }
 
 impl SignalIntake {
     /// Installs the intake. Stop signals request a stop; on Unix, SIGHUP
-    /// (reload) and SIGUSR1 (dump) are received without stopping.
-    pub(crate) fn install(kernel: Kernel, log: LogSlot) -> Result<SignalIntake, Error> {
+    /// (reload) and SIGUSR1 (dump) are received without stopping. With
+    /// `[kernel] reload_signal` or `dump_signal` off they are still
+    /// received (their default action would end the process) and ignored.
+    pub(crate) fn install(
+        kernel: Kernel,
+        log: LogSlot,
+        reload_on: bool,
+        dump_on: bool,
+    ) -> Result<SignalIntake, Error> {
         let (stop, notify) = signal_sets();
         let coordinator = Coordinator::builder()
             .signals(stop)
@@ -47,13 +66,17 @@ impl SignalIntake {
             .member_of(Member::Signals)
             .caused_by(e)
         })?;
-        let dump: Arc<OnceLock<Dump>> = Arc::new(OnceLock::new());
-        let thread_dump = Arc::clone(&dump);
+        let actions = Arc::new(Actions {
+            reload_on,
+            dump_on,
+            ..Actions::default()
+        });
+        let thread_actions = Arc::clone(&actions);
         let spawned = thread::Builder::new()
             .name("system-suite-signals".to_owned())
             .spawn(move || {
                 while let Some(signal) = subscription.recv_blocking() {
-                    handle(signal, stop, &kernel, &log, &thread_dump);
+                    handle(signal, stop, &kernel, &log, &thread_actions);
                 }
             });
         let thread = match spawned {
@@ -72,14 +95,21 @@ impl SignalIntake {
         Ok(SignalIntake {
             coordinator,
             thread: Some(thread),
-            dump,
+            actions,
         })
     }
 
     /// Sets what the dump signal writes. Only the first call counts.
     pub(crate) fn set_dump(&self, dump: Dump) {
         // A second dump writer is ignored; the first stays in force.
-        drop(self.dump.set(dump));
+        drop(self.actions.dump.set(dump));
+    }
+
+    /// Sets what the reload signal does. Only the first call counts.
+    #[cfg(feature = "config")]
+    pub(crate) fn set_reload(&self, reload: Reload) {
+        // A second reloader is ignored; the first stays in force.
+        drop(self.actions.reload.set(reload));
     }
 
     /// Removes the intake. Signals then get the OS default action again.
@@ -93,7 +123,7 @@ impl SignalIntake {
     }
 }
 
-fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, dump: &OnceLock<Dump>) {
+fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, actions: &Actions) {
     let name = signal_name(signal);
     if stop.contains(signal) {
         if kernel.stop_for(StopReason::Signal { name }) {
@@ -107,11 +137,25 @@ fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, dump:
         return;
     }
     match signal {
-        Signal::Hangup => log.info(
-            "reload signal received; nothing to reload: this system has no configuration source",
+        Signal::Hangup if !actions.reload_on => log.info(
+            "reload signal ignored: [kernel] reload_signal is off",
             &[("signal", Val::Str(name))],
         ),
-        Signal::User1 => match dump.get() {
+        Signal::Hangup => match actions.reload.get() {
+            Some(reload) => {
+                log.info("reload signal received", &[("signal", Val::Str(name))]);
+                reload();
+            }
+            None => log.info(
+                "reload signal ignored: the system is not ready or has no configuration",
+                &[("signal", Val::Str(name))],
+            ),
+        },
+        Signal::User1 if !actions.dump_on => log.info(
+            "dump signal ignored: [kernel] dump_signal is off",
+            &[("signal", Val::Str(name))],
+        ),
+        Signal::User1 => match actions.dump.get() {
             Some(write) => write(),
             None => log.info(
                 "dump signal received during boot",
@@ -200,9 +244,21 @@ mod tests {
     fn test_handle_stop_signal_requests_stop_once() {
         let kernel = Kernel::new();
         let (stop, _) = signal_sets();
-        let dump = OnceLock::new();
-        handle(Signal::Terminate, stop, &kernel, &LogSlot::default(), &dump);
-        handle(Signal::Interrupt, stop, &kernel, &LogSlot::default(), &dump);
+        let actions = Actions::default();
+        handle(
+            Signal::Terminate,
+            stop,
+            &kernel,
+            &LogSlot::default(),
+            &actions,
+        );
+        handle(
+            Signal::Interrupt,
+            stop,
+            &kernel,
+            &LogSlot::default(),
+            &actions,
+        );
         assert_eq!(
             kernel.stop_reason(),
             Some(StopReason::Signal {
@@ -218,20 +274,30 @@ mod tests {
         let (stop, _) = signal_sets();
         let dumped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = Arc::clone(&dumped);
-        let dump: OnceLock<Dump> = OnceLock::new();
-        drop(dump.set(Box::new(move || {
+        let reloaded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reload_flag = Arc::clone(&reloaded);
+        let actions = Actions {
+            reload_on: true,
+            dump_on: true,
+            ..Actions::default()
+        };
+        drop(actions.dump.set(Box::new(move || {
             flag.store(true, std::sync::atomic::Ordering::SeqCst)
         })));
-        handle(Signal::Hangup, stop, &kernel, &LogSlot::default(), &dump);
-        handle(Signal::User1, stop, &kernel, &LogSlot::default(), &dump);
+        drop(actions.reload.set(Box::new(move || {
+            reload_flag.store(true, std::sync::atomic::Ordering::SeqCst)
+        })));
+        handle(Signal::Hangup, stop, &kernel, &LogSlot::default(), &actions);
+        handle(Signal::User1, stop, &kernel, &LogSlot::default(), &actions);
         assert_eq!(kernel.stop_reason(), None);
         assert!(dumped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(reloaded.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]
     fn test_intake_installs_and_uninstalls() {
         let kernel = Kernel::new();
-        let intake = SignalIntake::install(kernel.clone(), LogSlot::default());
+        let intake = SignalIntake::install(kernel.clone(), LogSlot::default(), true, true);
         assert!(intake.is_ok());
         if let Ok(intake) = intake
             && let Some(thread) = intake.uninstall()

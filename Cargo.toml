@@ -71,14 +71,14 @@ paths = ["dep:path-lib"]
 # Environment variables and .env files (env-lib).
 env = ["paths", "dep:env-lib"]
 
-# Configuration (config-lib, `conf` format; dev/PLAN.md, D-034). Wired in 0.4.
-config = ["paths"]
+# Configuration (config-lib, `conf` format; dev/PLAN.md, D-034).
+config = ["paths", "dep:config-lib"]
 
 # Structured logging (log-io).
 log = ["dep:log-io"]
 
-# Metrics (metrics-lib). Wired in 0.4.
-metrics = []
+# Metrics (metrics-lib): counters, gauges, timers.
+metrics = ["dep:metrics-lib"]
 
 # OS signals translated by the kernel (signal-mod).
 signals = ["kernel", "dep:signal-mod"]
@@ -107,6 +107,14 @@ secrets = []
 # Member features passed through (dev/PLAN.md section 12.5, D-036).
 # clock-lib's serde support: `Wall` and `Monotonic` serialise.
 time-serde = ["time", "clock-lib/serde"]
+# metrics-lib's histogram and summary.
+metrics-histogram = ["metrics", "metrics-lib/histogram"]
+# metrics-lib's rate meter.
+metrics-meter = ["metrics", "metrics-lib/meter"]
+# metrics-lib's StatsD and DogStatsD exporter (std only).
+metrics-statsd = ["metrics", "metrics-lib/statsd"]
+# metrics-lib's blocking `/metrics` server and Pushgateway client (std only).
+metrics-http = ["metrics", "metrics-lib/http"]
 
 
 # DEPENDENCIES
@@ -125,9 +133,18 @@ path-lib = { version = "1.1", optional = true }
 # The .env file and typed variables. First-party; brings path-lib.
 env-lib = { version = "1.0", optional = true }
 
+# Configuration in the `conf` format. First-party; brings thiserror, serde,
+# dashmap, and arc-swap (reviewed and accepted, dev/PLAN.md section 12.4).
+# Default features off: `hot-reload` brings `notify` (not accepted).
+config-lib = { version = "1.1", optional = true, default-features = false, features = ["conf"] }
+
 # Structured logging; 2.1 for the recent-lines ring (crash reports) and
 # file modes. First-party; no dependencies with these features.
 log-io = { version = "2.1", optional = true }
+
+# Metrics. First-party; no dependencies with these features. `system`
+# (process metrics) is off: it brings sysinfo on the BSDs, not yet reviewed.
+metrics-lib = { version = "2.0", optional = true, default-features = false, features = ["count", "gauge", "timer"] }
 
 # Signals without an async runtime: the `agnostic` back-end only (never
 # `tokio`, D-005). Brings signal-hook and libc on Unix and windows-sys on

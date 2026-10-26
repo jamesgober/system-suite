@@ -1,12 +1,16 @@
-//! The phases of the system, why it stops, and the deadlines it stops by.
+//! The phases of the system, why it stops, and the deadlines it stops by,
+//! and the contract every application subsystem follows ([`Subsystem`]).
 //!
-//! The kernel drives the lifecycle. From `0.4` this module also holds the
-//! contract every application subsystem follows (`Subsystem`).
+//! The kernel drives the lifecycle.
 
 use std::{
     fmt,
     time::{Duration, Instant},
 };
+
+mod subsystem;
+
+pub use subsystem::{Commit, Failure, Link, Mailbox, Position, Subsystem};
 
 /// The phase of the system's lifecycle.
 ///
@@ -168,6 +172,10 @@ impl Deadline {
                 .or_else(|| now.checked_add(Duration::from_secs(1)))
                 .unwrap_or(now),
         )
+    }
+
+    pub(crate) fn at(instant: Instant) -> Deadline {
+        Deadline(instant)
     }
 
     /// The deadline as an `Instant`.

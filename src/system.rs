@@ -2,7 +2,14 @@
 
 use std::{fmt, process::ExitCode, sync::Arc};
 
-#[cfg(any(feature = "sys", feature = "paths", feature = "env", feature = "log"))]
+#[cfg(any(
+    feature = "sys",
+    feature = "paths",
+    feature = "env",
+    feature = "log",
+    feature = "config",
+    feature = "metrics"
+))]
 use crate::ErrorKind;
 #[cfg(feature = "kernel")]
 use crate::lifecycle::{Phase, StopReason};
@@ -51,8 +58,12 @@ struct Shared {
     paths: path_lib::App,
     #[cfg(feature = "env")]
     env: env_lib::Env,
+    #[cfg(feature = "config")]
+    config: crate::Snapshot<crate::config::Config>,
     #[cfg(feature = "log")]
     log: log_io::Logger,
+    #[cfg(feature = "metrics")]
+    metrics: crate::metrics_handle::MetricsRef,
     #[cfg(feature = "time")]
     clock: Arc<dyn clock_lib::Clock>,
     #[cfg(feature = "ids")]
@@ -108,12 +119,38 @@ impl Foundation {
         &self.shared.env
     }
 
+    /// The configuration as currently in force: a cheap clone of the
+    /// latest snapshot. With [`Member::Config`](crate::Member::Config)
+    /// disabled, or no file found, every section has its defaults.
+    #[cfg(feature = "config")]
+    #[must_use]
+    pub fn config(&self) -> crate::config::Config {
+        (*self.shared.config.load()).clone()
+    }
+
+    /// The configuration's snapshot, for a per-thread
+    /// [`Reader`](crate::Reader) that sees each reload at its next `get`.
+    #[cfg(feature = "config")]
+    #[must_use]
+    pub fn config_snapshot(&self) -> &crate::Snapshot<crate::config::Config> {
+        &self.shared.config
+    }
+
     /// The system's logger. With [`Member::Log`](crate::Member::Log)
     /// disabled it has no sinks.
     #[cfg(feature = "log")]
     #[must_use]
     pub fn log(&self) -> &log_io::Logger {
         &self.shared.log
+    }
+
+    /// The metrics registry: the global one of metrics-lib when the system
+    /// may touch process-wide state (so its macros record into it),
+    /// otherwise the system's own.
+    #[cfg(feature = "metrics")]
+    #[must_use]
+    pub fn metrics(&self) -> &metrics_lib::MetricsCore {
+        &self.shared.metrics
     }
 
     /// The clock: the OS clock, or the one given to [`Builder::clock`].
@@ -123,9 +160,9 @@ impl Foundation {
         &*self.shared.clock
     }
 
-    /// The Snowflake generator for entity ids (worker id 0 until the
-    /// configuration sets `[ids] worker` in `0.4`). Use `try_next_id`:
-    /// `next_id` panics on clock skew.
+    /// The Snowflake generator for entity ids, with the worker id (and
+    /// epoch, if set) from `[ids]`. Use `try_next_id`: `next_id` panics on
+    /// clock skew.
     #[cfg(feature = "ids")]
     #[must_use]
     pub fn ids(&self) -> &id_forge::snowflake::Snowflake {
@@ -137,6 +174,13 @@ impl Foundation {
     #[must_use]
     pub fn kernel(&self) -> &crate::kernel::Kernel {
         &self.shared.kernel
+    }
+
+    /// The kernel's runtime: supervised workers and timers.
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub fn runtime(&self) -> &crate::runtime::Runtime {
+        self.shared.kernel.runtime()
     }
 }
 
@@ -183,32 +227,40 @@ impl System {
         Builder::new(name)
     }
 
-    /// Step 17: builds the foundation from the started parts and announces
-    /// readiness.
-    pub(crate) fn ready(mut parts: Parts) -> Result<System, Error> {
-        let foundation = match foundation_from(&mut parts) {
-            Ok(foundation) => foundation,
-            Err(error) => {
-                let _code = parts.teardown(error.kind().exit_value(), "boot failed");
-                return Err(error);
-            }
-        };
-        let boot_ms = u64::try_from(parts.began.elapsed().as_millis()).unwrap_or(u64::MAX);
+    /// Step 17: announces readiness and hands over the running system.
+    pub(crate) fn ready(mut parts: Parts, foundation: Foundation) -> System {
+        let boot_ms = crate::boot::millis(parts.began.elapsed());
         #[cfg(feature = "signals")]
         if let Some(intake) = &parts.signals {
             let dump = foundation.clone();
             intake.set_dump(Box::new(move || write_dump(&dump)));
+            #[cfg(feature = "config")]
+            if let Some(reloader) = &parts.reloader {
+                let reloader = Arc::clone(reloader);
+                intake.set_reload(Box::new(move || {
+                    // The outcome is logged and counted by the reloader.
+                    drop(reloader.reload());
+                }));
+            }
         }
         #[cfg(feature = "kernel")]
-        parts.kernel.set_phase(Phase::Ready);
+        {
+            parts.kernel.set_phase(Phase::Ready);
+            if let Some(metrics) = parts.kernel.metrics() {
+                metrics.boot_milliseconds(boot_ms);
+            }
+        }
         parts.notify("READY=1");
+        parts.notify("STATUS=ready");
         parts.mark_ready();
+        #[cfg(feature = "kernel")]
+        parts.start_watchdog();
         parts.log.info("ready", &[("boot_ms", Val::U64(boot_ms))]);
-        Ok(System {
+        System {
             foundation,
             parts,
             finished: false,
-        })
+        }
     }
 
     /// The typed handles, to hand to a framework or a thread.
@@ -286,11 +338,88 @@ impl System {
         self.foundation.kernel()
     }
 
+    /// See [`Foundation::config`].
+    #[cfg(feature = "config")]
+    #[must_use]
+    pub fn config(&self) -> crate::config::Config {
+        self.foundation.config()
+    }
+
+    /// See [`Foundation::config_snapshot`].
+    #[cfg(feature = "config")]
+    #[must_use]
+    pub fn config_snapshot(&self) -> &crate::Snapshot<crate::config::Config> {
+        self.foundation.config_snapshot()
+    }
+
+    /// See [`Foundation::metrics`].
+    #[cfg(feature = "metrics")]
+    #[must_use]
+    pub fn metrics(&self) -> &metrics_lib::MetricsCore {
+        self.foundation.metrics()
+    }
+
+    /// See [`Foundation::runtime`].
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub fn runtime(&self) -> &crate::runtime::Runtime {
+        self.foundation.runtime()
+    }
+
     /// The current lifecycle phase.
     #[cfg(feature = "kernel")]
     #[must_use]
     pub fn phase(&self) -> Phase {
         self.foundation.kernel().phase()
+    }
+
+    /// Asks for a clean stop exactly as a SIGTERM would. Returns `false` if
+    /// a stop was already requested (the first reason is kept). Never
+    /// blocks.
+    #[cfg(feature = "kernel")]
+    pub fn request_stop(&self, reason: &'static str) -> bool {
+        self.foundation.kernel().request_stop(reason)
+    }
+
+    /// Reads the configuration again, validates it, and asks every
+    /// subsystem to prepare its change; only if all of them succeed is the
+    /// new configuration published and every change committed. Returns the
+    /// new configuration version. On any failure nothing changes and the
+    /// old configuration stays in force.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigNotFound`](ErrorKind::ConfigNotFound),
+    /// [`ConfigInsecure`](ErrorKind::ConfigInsecure),
+    /// [`ConfigInvalid`](ErrorKind::ConfigInvalid), and
+    /// [`Secret`](ErrorKind::Secret) as at boot step 5;
+    /// [`ReloadRefused`](ErrorKind::ReloadRefused) when a subsystem refused;
+    /// [`Stopping`](ErrorKind::Stopping) once a stop was requested.
+    #[cfg(all(feature = "kernel", feature = "config"))]
+    pub fn reload(&self) -> Result<u64, Error> {
+        match &self.parts.reloader {
+            Some(reloader) => reloader.reload(),
+            None => Err(Error::new(
+                ErrorKind::Kernel,
+                "internal: the reloader was not set up by its boot step",
+                "report this as a bug in system-suite",
+            )),
+        }
+    }
+
+    /// Every member, subsystem, worker, and the timer thread. Allocates;
+    /// for health endpoints and the dump signal.
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub fn health(&self) -> crate::kernel::HealthReport {
+        self.foundation.kernel().health()
+    }
+
+    /// The aggregate status only. Does not allocate.
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub fn status(&self) -> crate::kernel::Status {
+        self.foundation.kernel().status()
     }
 
     /// Parks the calling thread with zero CPU until a stop is requested (a
@@ -352,9 +481,16 @@ impl fmt::Debug for System {
     }
 }
 
-/// Builds the foundation from the started parts.
-fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
-    #[cfg(any(feature = "sys", feature = "paths", feature = "env", feature = "log"))]
+/// Builds the foundation from the parts started by steps 1 to 15.
+pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
+    #[cfg(any(
+        feature = "sys",
+        feature = "paths",
+        feature = "env",
+        feature = "log",
+        feature = "config",
+        feature = "metrics"
+    ))]
     let missing = |what: &str| {
         Error::new(
             ErrorKind::Kernel,
@@ -382,8 +518,18 @@ fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
                 .env
                 .clone()
                 .ok_or_else(|| missing("the environment"))?,
+            #[cfg(feature = "config")]
+            config: parts
+                .config
+                .clone()
+                .ok_or_else(|| missing("the configuration"))?,
             #[cfg(feature = "log")]
             log: parts.logger.clone().ok_or_else(|| missing("the logger"))?,
+            #[cfg(feature = "metrics")]
+            metrics: parts
+                .metrics
+                .clone()
+                .ok_or_else(|| missing("the metrics registry"))?,
             #[cfg(feature = "time")]
             clock: parts
                 .settings
@@ -391,28 +537,40 @@ fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
                 .take()
                 .unwrap_or_else(|| Arc::new(clock_lib::SystemClock::new())),
             #[cfg(feature = "ids")]
-            ids: id_forge::snowflake::Snowflake::new(0),
+            ids: match parts.sections.ids.epoch_ms {
+                Some(epoch) => {
+                    id_forge::snowflake::Snowflake::with_epoch(parts.sections.ids.worker, epoch)
+                }
+                None => id_forge::snowflake::Snowflake::new(parts.sections.ids.worker),
+            },
             #[cfg(feature = "kernel")]
             kernel: parts.kernel.clone(),
         }),
     })
 }
 
-/// The dump signal's output: one log line with the system's state.
+/// The dump signal's output: one log line with the system's state and its
+/// health, component by component.
 #[cfg(feature = "signals")]
 fn write_dump(foundation: &Foundation) {
     #[cfg(feature = "log")]
     {
-        let phase = foundation.kernel().phase();
+        let report = foundation.kernel().health();
         #[cfg(feature = "sys")]
         let instance = foundation.instance().to_string();
         #[cfg(not(feature = "sys"))]
         let instance = String::from("unknown");
+        let mut health = String::new();
+        // Writing into a String cannot fail.
+        let _written = report.write_kv(&mut health);
         log_io::info!(
             foundation.log(),
             "state",
-            phase = phase.name(),
-            instance = instance.as_str()
+            phase = report.phase().name(),
+            status = report.status().name(),
+            urgent = report.urgent().name(),
+            instance = instance.as_str(),
+            health = health.as_str()
         );
     }
     #[cfg(not(feature = "log"))]
