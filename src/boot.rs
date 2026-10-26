@@ -36,6 +36,11 @@ use crate::{
 #[cfg(feature = "log")]
 pub(crate) type RecentLog = log_io::sink::RecentLines<log_io::format::JsonFormat>;
 
+/// What a subsystem stopped after the subsystems' part of the shutdown
+/// deadline is spent still gets, from the member reserve (D-047).
+#[cfg(feature = "kernel")]
+const SUBSYSTEM_GRACE: Duration = Duration::from_millis(100);
+
 /// A boot step.
 pub(crate) type StepFn = fn(&mut Parts) -> Result<(), Error>;
 
@@ -183,7 +188,7 @@ impl Parts {
             let subsystems_deadline = began
                 .checked_add(budget.saturating_sub(reserve))
                 .unwrap_or(began);
-            code = self.stop_subsystems(subsystems_deadline, code);
+            code = self.stop_subsystems(subsystems_deadline, deadline, code);
         }
 
         // 3. Stopping: workers and timers.
@@ -236,8 +241,16 @@ impl Parts {
     /// Shutdown step 2: every started subsystem, last started first, each
     /// on a stop thread so the deadline holds (threat T6).
     #[cfg(feature = "kernel")]
-    fn stop_subsystems(&self, deadline: Instant, mut code: u8) -> u8 {
+    fn stop_subsystems(&self, part: Instant, whole: Instant, mut code: u8) -> u8 {
         while let Some(slot) = self.kernel.pop_slot() {
+            // Once the subsystems' part of the deadline is spent (one of them
+            // was abandoned), each later subsystem is still asked to stop and
+            // given a short grace from the member reserve, never past the
+            // whole deadline (D-047).
+            let now = Instant::now();
+            let deadline = part
+                .max(now.checked_add(SUBSYSTEM_GRACE).unwrap_or(now))
+                .min(whole.max(now));
             let name = slot.name.clone();
             let stop_slot = Arc::clone(&slot);
             let stop_deadline = crate::lifecycle::Deadline::at(deadline);

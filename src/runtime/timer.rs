@@ -99,8 +99,7 @@ struct State {
     panicked: Option<&'static str>,
 }
 
-/// The timer wheel's replacement: a heap, one thread, one condition
-/// variable.
+/// Every timer of a runtime: a heap, one thread, one condition variable.
 pub(crate) struct Timers {
     state: Mutex<State>,
     wake: Condvar,
@@ -199,7 +198,19 @@ impl Timers {
     /// Stops the timer thread and waits for it until `deadline`. Returns
     /// whether it ended in time.
     pub(crate) fn stop(&self, deadline: Instant) -> bool {
-        self.lock().stopping = true;
+        {
+            let mut state = self.lock();
+            state.stopping = true;
+            // No timer fires after a stop, so none is reported active.
+            for entry in state.entries.values() {
+                let _was_active = entry.state.compare_exchange(
+                    ACTIVE,
+                    CANCELLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            }
+        }
         self.wake.notify_all();
         let handle = self
             .thread
