@@ -42,14 +42,15 @@ Exit: a service boots with `start!`, logs, parks in `run`, and stops in order on
 API: SUI-04 (config, metrics), SUI-11, SUI-12, SUI-13, SUI-14, SUI-15 (without `Secret`), SUI-21, SUI-22, SUI-25.
 Requires: nothing unpublished: config-lib 1.1 is the backend as published (D-034); [config-lib#4](https://github.com/jamesgober/config-lib/issues/4) is a cleanup that can land at any time.
 Exit: configuration loads, validates, and reloads (T7); subsystems register and stop in declared order; workers and timers run supervised with zero idle CPU.
-- [ ] Configuration (section 9): finding, permission check (D-020), the `.env` redirect check (section 18), sections, `FromConfig`, two-phase reload (D-019), with T7 tests. A secret reference is refused in 0.4 (fail closed).
+- [x] Configuration (section 9): finding, permission check on the opened file (D-020, D-049), the `.env` file checked before it is read and its redirect honoured (section 18, D-055), sections with unknown-key refusal, `FromConfig`, two-phase reload (D-019) on SIGHUP and `System::reload`, with T7 tests. A secret reference is refused in 0.4 (fail closed).
 - Moved to 0.5 (D-031): resolving secret references (FR-16) and the T2 tests. Resolution goes through key-vault (D-025), which this roadmap already wires in 0.5; resolving references in 0.4 would mean pulling key-vault forward or resolving them without it.
-- [ ] metrics-lib wired; kernel metrics (boot timeline, worker restarts).
-- [ ] Urgent line (T0, T1) with `loom` tests; `Subsystem` trait, `Position`, `Link`, `Mailbox`; `Boot`.
-- [ ] Workers with restart policies; timer wheel.
-- [ ] T6 at the subsystem level: a subsystem whose `stop` never returns is abandoned at the deadline, exit code 79 (moved from 0.3, D-044).
-- [ ] `log-bridge` and `log-tracing` pass-through features, once `log`, `tracing-core`, and `tracing-subscriber` are in the dependency register (moved from 0.3, D-040).
-- [ ] Health aggregation; `sd_notify` readiness; watchdog heartbeat.
+- [x] metrics-lib wired (global registry in process-wide mode, D-053); kernel metrics (boot time, urgent level, worker restarts and failures, subsystem errors, reloads); pass-throughs `metrics-histogram`, `metrics-meter`, `metrics-statsd`, `metrics-http`.
+- [x] Urgent line (T0, T1); `Subsystem` trait, `Position`, `Link`, `Mailbox`, `Failure`, `Commit`; `Boot`; `Snapshot` and `Reader`.
+- Moved (D-051): the `loom` model tests of the urgent line and heartbeats, until `loom` is reviewed into the register. 0.4 tests the same invariants with std threads under contention.
+- [x] Workers with restart policies, backoff, budgets, criticality, heartbeats; timers (a min-heap, D-046).
+- [x] T6 at the subsystem level: a subsystem whose `stop` never returns is abandoned at the deadline, exit code 79, and the subsystem started before it is still stopped (D-044, D-047).
+- Moved again (D-040, D-050): the `log-bridge` and `log-tracing` pass-throughs, and `config-json`, `config-toml`, `config-noml`, `config-xml`, `config-validation`, `metrics-otlp`, `metrics-json`, `metrics-tracing`, `metrics-system` (with `[metrics] process`). Each brings a crate that is not yet in the dependency register; the review was asked for on 2026-10-23 and 2026-10-26 and is not answered. Each ships in the release after its crates are accepted.
+- [x] Health aggregation; `sd_notify` readiness, status, and the watchdog keep-alive (`WATCHDOG_USEC`).
 
 ## v0.5.0 - Feature complete
 API: every remaining item in `PLAN.md` section 8 (SUI-15 `Secret`, SUI-28, SUI-29, SUI-30); audit, registry, globals, rand, secrets wired.

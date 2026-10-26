@@ -94,11 +94,11 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
 
 ```toml
 [dependencies]
-system-suite = "0.3"
+system-suite = "0.4"
 
 [build-dependencies]
 # Only for build info (the build commit, time, and profile in the first log line).
-system-suite = { version = "0.3", default-features = false, features = ["sys"] }
+system-suite = { version = "0.4", default-features = false, features = ["sys"] }
 ```
 
 ```rust,ignore
@@ -130,9 +130,9 @@ Every member is behind its own feature, and every feature is additive: turning o
 | `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1.1 | application and OS directories, owner-only where the suite writes | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
-| `config` | yes | config-lib 1, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
+| `config` | yes | config-lib 1.1, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2.1 | structured logging, the crash report's recent lines | none |
-| `metrics` | yes | metrics-lib 2 (no integrations) | counters, gauges, timers, histograms | none |
+| `metrics` | yes | metrics-lib 2 (counters, gauges, timers; no integrations) | the system's registry and the kernel's own metrics | none |
 | `signals` | yes | signal-mod 2, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
 | `time` | yes | clock-lib 1 | monotonic and wall clocks, a mockable `Clock` | none |
 | `ids` | yes | id-forge 1 | ULID, UUID, Snowflake | none |
@@ -151,22 +151,24 @@ A member's own optional features are available through the suite, so a project s
 
 | Feature | Turns on | Brings | Since |
 |---|---|---|---|
-| `log-bridge` | log-io's `log`: records from crates that use the `log` facade go to the suite's logger | log | 0.3 |
-| `log-tracing` | log-io's `tracing`: a `tracing` subscriber that writes through log-io | tracing-core, tracing-subscriber | 0.3 |
 | `time-serde` | clock-lib's `serde`: `Wall` and `Monotonic` serialise | serde | 0.3 |
-| `config-json`, `config-toml`, `config-noml`, `config-xml` | config-lib's formats of the same names | serde_json; noml; noml; quick-xml | 0.4 |
-| `config-validation` | config-lib's rule-based validation | regex | 0.4 |
 | `metrics-histogram`, `metrics-meter` | metrics-lib's histogram and summary, rate meter | none | 0.4 |
-| `metrics-http` | metrics-lib's HTTP exporter and Pushgateway client | http | 0.4 |
-| `metrics-statsd`, `metrics-otlp`, `metrics-json` | metrics-lib's StatsD push, OTLP rendering, JSON rendering | serde, serde_json (OTLP, JSON) | 0.4 |
-| `metrics-tracing` | metrics-lib's tracing integration | tracing | 0.4 |
+| `metrics-statsd` | metrics-lib's StatsD and DogStatsD push (std UDP) | none | 0.4 |
+| `metrics-http` | metrics-lib's blocking `/metrics` server and Pushgateway client (std TCP) | none | 0.4 |
+| `log-bridge` | log-io's `log`: records from crates that use the `log` facade go to the suite's logger | log | when reviewed (D-040) |
+| `log-tracing` | log-io's `tracing`: a `tracing` subscriber that writes through log-io | tracing-core, tracing-subscriber | when reviewed (D-040) |
+| `config-json`, `config-toml`, `config-noml`, `config-xml` | config-lib's formats of the same names | serde_json; noml, indexmap; noml, indexmap; quick-xml | when reviewed (D-050) |
+| `config-validation` | config-lib's rule-based validation | regex | when reviewed (D-050) |
+| `metrics-otlp`, `metrics-json` | metrics-lib's OTLP rendering, JSON rendering | serde, serde_json | when reviewed (D-050) |
+| `metrics-tracing` | metrics-lib's tracing integration | tracing | when reviewed (D-050) |
+| `metrics-system` | metrics-lib's process metrics (`process_*`) and host health; `[metrics] process` | sysinfo (the BSDs only) | when reviewed (D-050) |
 | `audit-blake3` | audit-trail's BLAKE3 hasher (selected with `[audit] hash = "blake3"`) | blake3 | 0.5 |
 | `registry-async` | registry-io's `AsyncRegistry` (runtime-agnostic futures, no executor) | futures-core | 0.5 |
 | `secrets-keychain` | key-vault's OS keychain fetcher | keyring; on Linux its Secret Service back-end runs async-io's reactor thread, so this one is decided against the register when key-vault is wired | 0.5 |
 
 Not passed through: anything that brings an async runtime (signal-mod's `tokio`, metrics-lib's `async`, config-lib's `async`, key-vault's TPM stub), and config-lib's `hot-reload` (an idle watcher thread; the suite reloads by signal or call).
 
-A project can also reach any member feature directly: adding the member with the feature it wants (`metrics-lib = { version = "2", default-features = false, features = ["http"] }`) works too, because Cargo merges the features of one crate version, so `system_suite::metrics` gets it. The pass-through is the same thing without the second line and without having to match the member's version by hand.
+A pass-through marked "when reviewed" brings a third-party crate that is not yet in the dependency register; it is added in the release after the crate is reviewed and accepted (D-032). A project can also reach any member feature directly: adding the member with the feature it wants (`metrics-lib = { version = "2", default-features = false, features = ["http"] }`) works too, because Cargo merges the features of one crate version, so `system_suite::metrics` gets it. The pass-through is the same thing without the second line and without having to match the member's version by hand.
 
 ### Build info in `build.rs`
 
@@ -869,13 +871,13 @@ pub enum ErrorKind { /* the variants below */ }
 | `Paths` | an application directory cannot be resolved or created, or is a symlink | the message names the directory and the reason; set `<NAME>_<KIND>_DIR` or fix the permissions | 73 | 0.3 |
 | `Environment` | the `.env` file is malformed, too large, or unreadable | fix the line named in the message | 78 | 0.3 |
 | `ConfigNotFound` | an explicit configuration file (builder or `<NAME>_CONFIG`) does not exist | create it, or fix the path | 78 | 0.4 |
-| `ConfigInsecure` | the configuration file is group- or world-writable, or owned by another user (D-020) | `chmod 640` (or `600`) and `chown` to the service user, or set `[config] allow_insecure_file = true` in a file that is itself secure | 77 | 0.4 |
+| `ConfigInsecure` | the configuration file (or the `.env` file) is group- or world-writable, or owned by another user (Unix; D-020) | `chmod 640` (or `600`) and `chown` to the service user; there is no switch to accept it (D-048) | 77 | 0.4 |
 | `ConfigInvalid` | the file does not parse, a member section has an invalid value, or a value read later has the wrong type | the message names the file, line, key, expected type, and accepted values | 78 | 0.4 |
 | `AlreadyRunning` | another copy holds the single-instance lock | stop the other copy, or use another name | 75 | 0.3 |
 | `LockDirInsecure` | the lock directory cannot be created, is writable by others, a symlink, or on a network filesystem | the message gives the fix (`chmod 700`, a local directory, `[guard] allow_network_lock`) | 77 | 0.3 |
 | `Limits` | the hard open-file limit is below `[guard] open_files_minimum` | raise `LimitNOFILE=` in the systemd unit, `ulimit -Hn`, or the launchd limit | 69 | 0.3 |
 | `Signals` | the signal intake could not be installed | the message names the signal; another library may own it, or run with `disable(Member::Signals)` | 70 | 0.3 |
-| `Secret` | a secret reference cannot be resolved: the variable is unset, the file is missing or too open (Unix: looser than `0600`), the vault has no such name | the message names the reference, never the value | 78 | 0.5 |
+| `Secret` | a secret reference cannot be resolved: the variable is unset, the file is missing or too open (Unix: looser than `0600`), the vault has no such name; in 0.4, any reference (resolution needs the `secrets` feature, 0.5) | the message names the key, never the value | 78 | 0.4 |
 | `PlainSecret` | a key whose name marks a secret (`password`, `token`, `secret`, ...) holds a plain value instead of a reference | replace it with `env:NAME`, `file:/path`, or `vault:name`, or set `[secrets] allow_plain = true` | 78 | 0.5 |
 | `Logging` | a log sink cannot be opened | the message names the file and the I/O error | 73 | 0.3 |
 | `Metrics` | the metrics registry rejected its configuration | the message names the key | 70 | 0.4 |
@@ -962,6 +964,7 @@ pub enum Level { Normal = 0, Shed = 1, Lockdown = 2, Draining = 3, Stopping = 4 
 #[derive(Clone)]
 pub struct UrgentLine { /* Arc: one cache-line-aligned atomic level, epoch, and reason */ }
 impl UrgentLine {
+    pub fn detached() -> UrgentLine;                                            // a line no kernel drives: tests, libraries
     pub fn level(&self) -> Level;                                               // #[inline]
     pub fn epoch(&self) -> u64;                                                 // #[inline]
     pub fn notice(&self) -> Notice;
@@ -1069,11 +1072,11 @@ pub enum Component { Member(Member), Subsystem, Worker, Timers }
 
 Health aggregates every member, subsystem, worker, and the timer thread (FR-11). The aggregate is the worst component status, with one exception: a worker that is not `critical` can make the system at most `Degraded`. The report never contains a configuration value or a secret; reasons are the components' own words.
 
-When `NOTIFY_SOCKET` is set (systemd, Linux only), the kernel sends `READY=1` at boot step 17, `STATUS=<phase, status>` on every change, `WATCHDOG=1` at half of `WATCHDOG_USEC` while the status is not `Unhealthy` (so systemd restarts a wedged process), and `STOPPING=1` at shutdown step 1. It uses a std Unix datagram socket, no FFI. A heartbeat to the planned out-of-process watchdog (tower) is added when tower exists; the API above does not change.
+When `NOTIFY_SOCKET` is set (systemd, Linux only) and `[kernel] notify` is `"auto"`, the kernel sends `READY=1` and `STATUS=ready` at boot step 17, `STOPPING=1` and `STATUS=stopping` at shutdown step 1, and, when systemd asked for keep-alives (`WATCHDOG_USEC`, for this process), `WATCHDOG=1` at half that interval while the status is not `Unhealthy` (so systemd restarts a wedged process) and `STATUS=<status>` whenever the aggregate status changes. The keep-alive is a timer named `systemd-watchdog` on the runtime's timer thread. It uses a std Unix datagram socket, no FFI. A heartbeat to the planned out-of-process watchdog (tower) is added when tower exists; the API above does not change.
 
 | Operation | Cost [est.] |
 |---|---|
-| `status()` | one `health()` call per subsystem, an atomic read per worker; no allocation (counting-allocator tested) |
+| `status()` | one `health()` call per subsystem (a subsystem whose `stop`, `reload`, or `start` holds it reports its last health instead of blocking), an atomic read per worker; no allocation of its own [counting-allocator test in 0.6] |
 | `health()` | the same plus one `Vec` and the reasons |
 
 ```rust,ignore
@@ -1368,7 +1371,7 @@ Where background work runs: supervised worker threads and timers, without an asy
 
 ```rust,ignore
 #[derive(Clone)]
-pub struct Runtime { /* Arc: the worker supervisor and the timer wheel */ }
+pub struct Runtime { /* Arc: the worker supervisor and the timers */ }
 impl Runtime {
     pub fn every<F>(&self, name: &'static str, period: Duration, tick: F) -> Result<TimerHandle, Error>
     where F: FnMut() + Send + 'static;
@@ -1429,7 +1432,7 @@ A named thread the kernel supervises: the services' own housekeeping (log shippi
 
 - `run` is called on the worker's thread. Returning `Ok(())` ends the worker (restarted only under `Restart::Always`, and never once a stop was requested). Returning `Err` or panicking is a failure: it is logged and counted, and the worker restarts per its policy after its backoff.
 - A worker that fails more than its budget allows within the window is marked `Failed` and reported `Unhealthy`. If it is `critical`, the kernel requests a stop with `StopReason::WorkerFailed` (exit code 70).
-- With `heartbeat(every)`, a worker that has not called `heartbeat()` for three periods is reported `Degraded` (the heartbeat word is written only by the worker, and tested with `loom`).
+- With `heartbeat(every)`, a worker that has not called `heartbeat()` for three periods is reported `Degraded` (the heartbeat word is written only by the worker; `loom` tests wait for loom's review, D-051).
 - At shutdown step 3 every worker is asked to stop (`should_stop()` becomes true and `park` returns) and joined within the deadline; one that does not return is abandoned and reported.
 - Under `panic = "abort"` a panic ends the process after the crash report; restarts on panic apply to `panic = "unwind"` builds.
 
@@ -1485,7 +1488,7 @@ impl Backoff {
 }
 ```
 
-`OnFailure` restarts after an `Err` or a panic; `Always` also after `Ok(())`; `Never` never. The backoff delay doubles from `min` to `max` with up to 25% random jitter (from mod-rand's process-unique generator when compiled in, a time-derived value otherwise), so many workers failing together do not restart together.
+`OnFailure` restarts after an `Err` or a panic; `Always` also after `Ok(())`; `Never` never. The backoff delay doubles from `min` to `max` with up to 25% jitter (a mix of the clock's nanoseconds and the attempt number in 0.4; mod-rand's generator once `rand` is wired in 0.5), so many workers failing together do not restart together.
 
 ```rust
 use system_suite::runtime::Backoff;
@@ -1509,7 +1512,7 @@ impl Runtime {
 }
 
 #[derive(Clone)]
-pub struct TimerHandle { /* slot in the wheel */ }
+pub struct TimerHandle { /* the timer's name and state */ }
 impl TimerHandle {
     pub fn name(&self) -> &'static str;
     pub fn cancel(&self) -> bool;          // false if it already fired (one-shot) or was cancelled
@@ -1517,11 +1520,11 @@ impl TimerHandle {
 }
 ```
 
-Periodic and one-shot timers on one kernel thread with a hierarchical timing wheel (1 ms resolution [est.]): no thread per timer, and with nothing due the thread parks with no timeout (FR-10, NFR-2). A periodic timer fires first after one period; ticks missed while a callback ran long are skipped, not replayed in a burst. Callbacks run on the timer thread and must return quickly (well under a millisecond); heavier work wakes a worker. A callback that panics under `panic = "unwind"` cancels its timer and is reported `Degraded`.
+Periodic and one-shot timers on one kernel thread, ordered in a min-heap of due times (D-046): no thread per timer, the thread starts with the first timer, and with nothing due it waits with no timeout (FR-10, NFR-2). Resolution is the OS's condition-variable timeout (about 1 ms on Linux, up to the scheduler tick on Windows). A periodic timer fires first after one period; ticks missed while a callback ran long are skipped, not replayed in a burst. Callbacks run on the timer thread and must return quickly (well under a millisecond); heavier work wakes a worker. A callback that panics under `panic = "unwind"` cancels its timer and is reported `Degraded`. At shutdown step 3 every timer is cancelled (`is_active` becomes false) and the thread is joined within the deadline.
 
-Errors: `Setup` (zero period, a period over 30 days), `Stopping`.
+Errors: `Setup` (invalid name, zero period, a period over 30 days), `Stopping`, `Kernel` (the OS refused the timer thread).
 
-Cost [est.]: arming or cancelling about 50 ns; a fire about 100 ns plus the callback.
+Cost [est.]: arming O(log n), one allocation for the callback, about 100 ns; cancelling one atomic compare-and-swap (the entry is dropped when it comes due); a fire O(log n) plus the callback.
 
 ```rust,ignore
 let flush = system.runtime().every("metrics-export", Duration::from_secs(15), || {
@@ -1546,6 +1549,7 @@ The suite's view of the configuration: one file per application, one section per
 #[derive(Clone)]
 pub struct Config { /* Arc: the parsed document, its source, its version */ }
 impl Config {
+    pub fn from_text(text: &str) -> Result<Config, Error>;   // parse `conf` text: tests, embedded defaults
     pub fn get<T: FromConfig>(&self, path: &str) -> Result<Option<T>, Error>;
     pub fn require<T: FromConfig>(&self, path: &str) -> Result<T, Error>;
     pub fn get_or<T: FromConfig>(&self, path: &str, default: T) -> Result<T, Error>;
@@ -1628,7 +1632,7 @@ The first that applies wins:
 3. `<config dir>/<name>.conf` (with `config-toml` or `config-noml`, also `<name>.toml` or `<name>.noml`; finding two is a `ConfigInvalid` error naming both);
 4. `./<name>.conf` (and the same alternatives) in the working directory, only when the process is not running as root or an administrator (a working directory is easy to influence; a privileged service must name its file).
 
-In cases 1 and 2 a missing file is an error. In cases 3 and 4 a missing file means "no file": every section takes its defaults and the first log lines say which places were searched. Before parsing, the file's owner and permissions are checked (the 0.2 defence idea, D-020): on Unix a file that is group- or world-writable, or owned by a user other than the service user or root, is refused with `ConfigInsecure`.
+In cases 1 and 2 a missing file is an error. In cases 3 and 4 a missing file means "no file": every section takes its defaults and the first log lines say where the configuration came from. Before parsing, the file's owner and permissions are checked on the opened file, so the file checked is the file read (the 0.2 defence idea, D-020, and the 0.4 one, D-049): on Unix a file that is group- or world-writable, or owned by a user other than the service user or root, is refused with `ConfigInsecure`. There is no switch to accept such a file (D-048): the fix is `chmod 640` (or `600`) and, if needed, `chown`. The `.env` file is checked the same way before it is read, because it can name the configuration file. A file over 1 MiB is refused with `ConfigInvalid`. A parse error names the line and column and never quotes the text, which may hold a secret.
 
 ### Sections
 
@@ -1636,17 +1640,18 @@ Every section is optional and every key has a secure default. The complete refer
 
 | Section | Keys (default) | Since |
 |---|---|---|
-| `[config]` | `allow_insecure_file` (`false`) | 0.4 |
 | `[guard]` | `lock` (`true`), `lock_dir` (the runtime directory), `allow_network_lock` (`false`), `umask` (`"0027"`), `open_files_target` (`65536`), `open_files_minimum` (`1024`) | 0.4 |
-| `[log]` | `level` (`"info"`), `filter`, `format` (`"human"` on a terminal, `"json"` otherwise), `stderr` (`true`), `file` (`true` when a log directory exists), `max_bytes`, `rotation` (`"daily"`), `max_files` (`14`), `redact` (list), `redact_common` (`true`), `recent_lines` (`64`, for crash reports) | 0.4 |
+| `[log]` | `level` (`"info"`), `filter`, `format` (`"auto"`: `"human"` on a terminal, `"json"` otherwise; or `"logfmt"`), `stderr` (`true`), `file` (`true` when a log directory exists), `max_bytes`, `rotation` (`"daily"`; `"hourly"`, `"never"`), `max_files` (`14`), `redact` (list, `["a", "b"]`), `redact_common` (`true`), `recent_lines` (`64`, for crash reports) | 0.4 |
 | `[crash]` | `enabled` (`true`), `max_reports` (`8`) | 0.4 |
-| `[metrics]` | `enabled` (`true`), `max_series` (`10000`), `process` (`true`) | 0.4 |
+| `[metrics]` | `enabled` (`true`), `max_series` (`10000`); `process` arrives with `metrics-system` (D-050) | 0.4 |
 | `[kernel]` | `shutdown_deadline` (`"25s"`), `member_reserve` (`"2s"`), `notify` (`"auto"`), `reload_signal` (`true`), `dump_signal` (`true`) | 0.4 |
-| `[ids]` | `worker` (`0`; 0 to 1023), `epoch` (id-forge's default) | 0.4 |
+| `[ids]` | `worker` (`0`; 0 to 1023), `epoch` (milliseconds since 1970; id-forge's default) | 0.4 |
 | `[audit]` | `enabled` (`true` when compiled in), `file` (`<data dir>/audit/<name>.audit`), `hash` (`"sha256"`), `sync` (`"every"`; or `"flush"`) | 0.5 |
 | `[secrets]` | `allow_plain` (`false`) | 0.5 |
 
-Settings given to the `Builder` win over the file. There are no implicit environment overrides of individual keys (D-021); a value that must come from the environment says so with a reference.
+Settings given to the `Builder` win over the file. There are no implicit environment overrides of individual keys (D-021); a value that must come from the environment says so with a reference. An unknown key in one of these sections is refused with `ConfigInvalid`, so a misspelt key cannot silently leave a setting at its default; other sections belong to the application and are not checked.
+
+On reload, `[kernel] shutdown_deadline` and `member_reserve` take effect at once (unless the `Builder` set them); changes to `[guard]`, `[log]`, `[crash]`, `[metrics]`, `[ids]`, and the `[kernel]` signal and notification keys are logged as "takes effect at restart".
 
 ## `AuditLog`
 

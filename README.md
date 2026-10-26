@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: first boot path (<code>0.3.0</code>).</strong> A service boots with one call, logs, parks with zero CPU, and stops in order on SIGTERM, SIGINT, or Ctrl+C. Configuration, metrics, the application's own subsystems, workers, and timers arrive in <code>0.4.0</code>; audit, registry, globals, randomness, and secrets in <code>0.5.0</code>. The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: extended (<code>0.4.0</code>).</strong> A service boots with one call, reads its configuration (and reloads it on SIGHUP, all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, reports health, and stops in order on SIGTERM, SIGINT, or Ctrl+C within a deadline. Audit, registry, globals, randomness, and secrets arrive in <code>0.5.0</code>. The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -40,11 +40,11 @@
 
 ```toml
 [dependencies]
-system-suite = "0.3"
+system-suite = "0.4"
 
 [build-dependencies]
 # Optional: the build commit and time in the first log line.
-system-suite = { version = "0.3", default-features = false, features = ["sys"] }
+system-suite = { version = "0.4", default-features = false, features = ["sys"] }
 ```
 
 ```rust
@@ -68,7 +68,48 @@ fn main() {
 
 `start!()` names the service after its package, takes the single-instance lock, opens the log (standard error and `<logs>/<name>.log`), installs the crash hook, and returns only when everything is up. A second copy exits with code 75; a boot failure prints what failed and what to do, and exits with a code that says why ([exit codes](./docs/API.md#exit-codes)). `run()` returns `0` after a clean stop.
 
-`System::builder("name")` sets the rest: the directory scope (`Scope::Global` for system services), a portable root, the `.env` file, a test clock, which members to disable, and the shutdown deadline.
+The configuration is `<config dir>/<name>.conf` (or the file named by `<NAME>_CONFIG`); every key has a secure default, so the file is optional. A file another user can change is refused.
+
+```ini
+# site.conf
+[log]
+level = "debug"
+
+[kernel]
+shutdown_deadline = "40s"
+
+[http]
+port = 8080
+```
+
+```rust
+use system_suite::lifecycle::{Deadline, Failure, Link, Position, Subsystem};
+
+struct Http { port: u16 }
+
+impl Subsystem for Http {
+    fn name(&self) -> &str { "http" }
+    fn position(&self) -> Position { Position::LAST }      // the door opens last, closes first
+    fn start(&mut self, link: &Link) -> Result<(), Failure> {
+        self.port = link.foundation().config().get_or("http.port", 8080)?;
+        Ok(())
+    }
+    fn stop(&mut self, _deadline: Deadline) -> Result<(), Failure> { Ok(()) }
+}
+
+fn main() -> std::process::ExitCode {
+    let system = match system_suite::System::builder("site")
+        .register(Http { port: 0 })
+        .start()
+    {
+        Ok(system) => system,
+        Err(error) => return error.report(),
+    };
+    system.run()
+}
+```
+
+`System::builder("name")` sets the rest: the directory scope (`Scope::Global` for system services), a portable root, the `.env` and configuration files, a test clock, which members to disable, the shutdown deadline, the subsystems, and `on_ready` callbacks. Frameworks that build their subsystems from the foundation use `builder.boot()`, `Boot::start`, and `Boot::ready`.
 
 ## Scope
 

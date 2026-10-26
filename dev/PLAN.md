@@ -220,7 +220,7 @@ On Windows, signal-mod reports logoff and system shutdown as its `Hangup` signal
 ### 6.5 Workers and timers
 
 - Workers are named threads with a restart policy (never, on failure, always), a backoff with jitter, a restart budget, and a criticality; their health is a heartbeat word written only by the worker (D-023).
-- Timers run on one kernel timer thread with a hierarchical timing wheel; with nothing due, the thread parks with no timeout.
+- Timers run on one kernel timer thread, ordered in a min-heap of due times (D-046); with nothing due, the thread waits with no timeout.
 - Long-running work belongs to task-io; the kernel's workers are for the services' own housekeeping (log flushing, metrics export, cache sweeps).
 
 ### 6.6 Health and readiness
@@ -388,7 +388,7 @@ src/
   runtime/
     mod.rs        Runtime handle
     worker.rs     supervised workers, Restart, Backoff
-    timer.rs      timing wheel
+    timer.rs      timers (a min-heap, D-046)
 ```
 
 ---
@@ -442,6 +442,20 @@ Every third-party crate the suite brings, and why it is acceptable (D-032). Revi
 | `subtle`, `zeroize`, `getrandom` 0.2 | key-vault | `secrets` | dalek-cryptography, RustCrypto, rust-random | constant-time comparison, wiping, OS randomness for the vault | getrandom 0.2 is the older line |
 
 Not accepted: any async runtime (tokio, async-std) in any feature, including signal-mod's default `tokio` feature and metrics-lib's `async` (D-005); `notify` (config-lib's default `hot-reload`; the suite reloads by signal or call, so it would be an idle watcher thread for nothing).
+
+Waiting for review (asked 2026-10-23 and 2026-10-26; each pass-through below ships in the release after its crates are accepted, D-040, D-050, D-051):
+
+| Crate | Would be brought by | Pass-through or use |
+|---|---|---|
+| `log` | log-io | `log-bridge` |
+| `tracing-core`, `tracing-subscriber` | log-io | `log-tracing` |
+| `tracing` | metrics-lib | `metrics-tracing` |
+| `serde_json` | config-lib, metrics-lib | `config-json`, `metrics-otlp`, `metrics-json` |
+| `noml` (pinned), `indexmap` | config-lib | `config-toml`, `config-noml` |
+| `quick-xml` | config-lib | `config-xml` |
+| `regex` | config-lib | `config-validation` |
+| `sysinfo` (the BSDs only) | metrics-lib's `system` | `metrics-system` and `[metrics] process` |
+| `loom` (development only) | the suite's tests | model tests of the urgent line and worker heartbeats |
 
 ### 12.5 Member features passed through
 
@@ -511,7 +525,8 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 - **Shutdown report:** at exit, one log line per subsystem with its stop duration and whether it met the deadline.
 - **Defence idea (0.2):** hypothesis: a configuration file that became world-writable since the last boot is a sign of tampering; method: the loader checks the file's permissions and owner before reading and refuses a group- or world-writable file unless explicitly allowed; expected cost: one `stat` at boot. **Adopted into the 0.4 design (D-020, `ErrorKind::ConfigInsecure`).**
 - **Defence idea (0.3):** hypothesis: someone with write access to the parent of the log or runtime directory can swap the directory for one they control between two boots, or loosen its permissions, and the service would keep writing its logs and lock there; method: at boot, after `ensure_private`, check that the existing log and runtime directories are still private (Unix: no group or other bits and owned by the process's user; Windows: a protected access control list naming only the user, `SYSTEM`, and `Administrators`) and refuse when they are not, unless allowed; expected cost: one `stat` or one access-control-list read per directory at boot, none at run time. Needs a read-back API in path-lib (a `check_private`).
-- **Defence idea (0.2, design lock):** hypothesis: whoever can write the application's `.env` file can redirect the whole configuration by setting `<NAME>_CONFIG` there, to a file they own; method: a `<NAME>_CONFIG` that came from the `.env` file (not from the process environment) must pass the same owner and permission check as the configuration file, the `.env` file itself is checked the same way before it is read, and a redirect is logged with where it came from; expected cost: two `stat` calls at boot, none at run time. Test: a group-writable `.env` that sets `<NAME>_CONFIG` is refused.
+- **Defence idea (0.2, design lock):** hypothesis: whoever can write the application's `.env` file can redirect the whole configuration by setting `<NAME>_CONFIG` there, to a file they own; method: a `<NAME>_CONFIG` that came from the `.env` file (not from the process environment) must pass the same owner and permission check as the configuration file, the `.env` file itself is checked the same way before it is read, and a redirect is logged with where it came from; expected cost: two `stat` calls at boot, none at run time. Test: a group-writable `.env` that sets `<NAME>_CONFIG` is refused. **Adopted in 0.4** (the `.env` file is checked before it is read; the redirect is logged as "named by the .env file").
+- **Defence idea (0.4):** hypothesis: a permission check on a path and the read that follows are two system calls, so whoever can write the directory can swap the checked file for another between them (a time-of-check to time-of-use race); method: open the configuration file first and check the owner and mode of the opened handle (`fstat`), so the file checked is the file read; expected cost: none measurable (one `fstat` instead of one `stat`). **Adopted in 0.4 (D-049).** The `.env` file is still checked by path, because env-lib opens it itself; the residual window needs write access to the configuration directory, which the directory's own permissions guard.
 
 ---
 
@@ -564,3 +579,13 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 | D-043 | 2026-10-23 | Boot and attack tests run each scenario in a child process (the test binary runs itself again), with every application directory pointed into a private temporary root | signals, the panic hook, the umask, and the lock are process-wide; a scenario must not see another's state or touch the user's own directories |
 | D-044 | 2026-10-23 | Threat T6 is tested in 0.3 at the mechanism level: the deadline runner abandons a step that never returns (used for the signal intake and the log flush). The subsystem-level attack test (a subsystem whose `stop` never returns) moves to 0.4 with subsystems | there is no subsystem to get stuck before 0.4; the mechanism the subsystems will use is the one tested now |
 | D-045 | 2026-10-23 | The member releases 0.3 needed were made in the members, as additive minor releases: path-lib 1.1.0 adds `ensure_private` and `create_private` (owner-only on every OS; Windows through a protected access control list set at creation) instead of changing `ensure`; log-io 2.1.0 adds `sink::RecentLines` and an opt-in `mode` on its file sinks, with the default unchanged | wiring, not features (D-002); changing what `ensure` does on Windows, or log-io's default file mode, would be a behavioural change, which those crates' stability contracts reserve for a major release |
+| D-046 | 2026-10-26 | Timers are a min-heap of due times on one lazily started thread, not a hierarchical timing wheel: arming and firing O(log n), cancelling one compare-and-swap (the entry is dropped when it comes due), and a wait with no timeout when nothing is due | a service has tens of timers, not millions; the heap has no fixed tick, so an idle process wakes for nothing (NFR-2) and a 30-day timer costs the same as a 1 ms one; the API is unchanged, so a wheel can replace it if a measurement in 0.6 asks for one |
+| D-047 | 2026-10-26 | Each subsystem's `stop` runs on its own stop thread; once the subsystems' part of the shutdown deadline is spent (one was abandoned), each later subsystem is still asked to stop and given 100 ms from the member reserve, never past the whole deadline | "the next subsystem is stopped" (T6) must hold even after a stuck one used all of its time; 100 ms lets a well-behaved `stop` finish while the reserve still covers the log flush |
+| D-048 | 2026-10-26 | No switch accepts a configuration or `.env` file that another user can change (the `[config] allow_insecure_file` key of the design lock is dropped before it shipped); a parse error names the line and column only, never the parser's message | fail closed (DIRECTIVES): the fix (`chmod 640`, `chown`) is always available to the operator and the error says so, while a switch in the file it protects would be set by the attacker it protects against; a parser message can quote the text, and the text can hold a secret |
+| D-049 | 2026-10-26 | The configuration file's owner and mode are checked on the opened file (`fstat`), not on the path before opening (the 0.4 defence idea, section 18) | closes the window between the check and the read; same cost |
+| D-050 | 2026-10-26 | 0.4 ships the pass-throughs that bring no third-party crate (`metrics-histogram`, `metrics-meter`, `metrics-statsd`, `metrics-http`); the ones that bring `serde_json`, `noml`/`indexmap`, `quick-xml`, `regex`, `tracing`, or `sysinfo` wait for their review (section 12.4), and `[metrics] process` waits with `metrics-system` (metrics-lib's `system` feature brings `sysinfo` on the BSDs) | no third-party crate is added before its review is recorded and accepted (D-032); the review was asked for and is not answered yet |
+| D-051 | 2026-10-26 | The `loom` model tests of the urgent line and worker heartbeats wait for `loom`'s review; 0.4 tests both with std threads under contention (concurrent `set` and `raise` never undo a stop; mailboxes and watchers see every change) | `loom` is a development dependency but still a third-party crate (D-032); the std-thread tests cover the same invariants without exhaustive interleavings |
+| D-052 | 2026-10-26 | With `[kernel] reload_signal` or `dump_signal` off, SIGHUP and SIGUSR1 are still received, and logged as ignored | the OS default for both ends the process (as in D-042); "off" means "do nothing", not "die" |
+| D-053 | 2026-10-26 | The metrics registry is metrics-lib's global one when the system may touch process-wide state; if another part of the process set it up first, that one is used and a warning logged; otherwise (and with `Member::Metrics` disabled or `[metrics] enabled = false`) the system has its own registry, which nothing exports. The kernel's metrics are named `system_suite_*` (listed in the `kernel::metrics` module documentation) | metrics-lib's global is set once (D-010); refusing to boot because a library touched it first would punish the application for a dependency's choice, and the warning says which settings were kept; a disabled member still has its accessor (API) |
+| D-054 | 2026-10-26 | In 0.4 a reload changes only the `[kernel]` deadlines live; every other suite section is logged as "takes effect at restart". The new configuration is read again from the same source (`config_str` included) | the log sinks, guard, ids, and metrics limits are built once at boot by their members, which have no live-change API yet; reporting them is honest, failing the reload for them would block every other change |
+| D-055 | 2026-10-26 | The `.env` file's default place is `<config dir>/.env` through path-lib's hardened join (as in 0.3), checked like the configuration file before env-lib opens it; a `CONFIG` key in it (with or without the `<NAME>_` prefix) names the configuration file only when the process environment does not | the 0.2 design-lock defence idea; the process environment wins because it is set by whoever started the process |

@@ -57,20 +57,20 @@ Written at the `0.2.0` design lock. Steps arrive with the members that perform t
 | 1 | `BuildInfo` | sys-lib | the build info compiled into the application by `start!` is recorded; it becomes the first log line at step 9 | cannot fail | 0.3 |
 | 2 | `Instance` | sys-lib, mod-rand | the instance (id, start time, host, pid, user) is created; with `rand` or `secrets` enabled, one read from the OS random source proves it works | `Entropy`: exit | 0.3 |
 | 3 | `Paths` | path-lib | the application's directories are resolved (scope from the builder or `<NAME>_PATH_SCOPE`, overrides from `<NAME>_<KIND>_DIR`); nothing is created | `Paths`: exit | 0.3 |
-| 4 | `Environment` | env-lib | the `.env` file in the configuration directory is read, if present; the process environment is never changed | `Environment`: exit | 0.3 |
-| 5 | `Configuration` | the configuration backend | the file is found (explicit path, `<NAME>_CONFIG`, the configuration directory, the working directory), its owner and permissions checked, parsed, and every member section validated; secret references are parsed, not resolved | `ConfigNotFound`, `ConfigInsecure`, `ConfigInvalid`: exit | 0.4 |
+| 4 | `Environment` | env-lib | the `.env` file in the configuration directory is checked (owner and permissions, as for the configuration file) and read, if present; the process environment is never changed | `Environment`, `ConfigInsecure`: exit | 0.3 |
+| 5 | `Configuration` | the configuration backend | the file is found (explicit path, `<NAME>_CONFIG`, the configuration directory, the working directory), opened, its owner and permissions checked on the opened file, parsed, and every suite section validated; a secret reference is refused until 0.5 | `ConfigNotFound`, `ConfigInsecure`, `ConfigInvalid`, `Secret`: exit | 0.4 |
 | 6 | `Guard` | sys-lib | single-instance lock in the runtime directory (or the configured one), pid file, umask `0o027`, open-file limit raised | `AlreadyRunning`, `LockDirInsecure`, `Limits`: exit, nothing created | 0.3 |
 | 7 | `Signals` | signal-mod | the kernel's signal intake is installed: stop, reload, and dump signals are recorded from here on and acted on at the next step boundary | `Signals`: exit | 0.3 |
 | 8 | `Secrets` | key-vault | secret references in the configuration (`vault:`, `env:`, `file:`) are resolved into the vault; plain-text secrets are refused unless allowed | `Secret`, `PlainSecret`: exit | 0.5 |
 | 9 | `Directories` | path-lib | the directories the enabled members write to (logs, data, state, runtime) are created owner-only | `Paths`: exit | 0.3 |
 | 10 | `Logging` | log-io | sinks opened; the first lines are the build info, the instance, guard warnings, and the duration of steps 1 to 9 | `Logging`: exit | 0.3 |
 | 11 | `CrashCapture` | this crate, log-io | the panic hook is installed with the recent-lines ring | cannot fail | 0.3 |
-| 12 | `Metrics` | metrics-lib | the registry is created (and installed process-wide unless `process_wide(false)`) | `Metrics`: unwind, exit | 0.4 |
+| 12 | `Metrics` | metrics-lib | the registry is created: metrics-lib's global one unless `process_wide(false)` (if another part of the process set it up first, that one is used and a warning logged), the system's own otherwise | `Metrics`: unwind, exit | 0.4 |
 | 13 | `Audit` | audit-trail | the chain is opened, the existing records verified, and the chain resumed at its tail | `Audit`, `AuditTampered`: unwind, exit | 0.5 |
 | 14 | `Registry` | registry-io | the kernel event registry is created | cannot fail | 0.5 |
-| 15 | `Kernel` | this crate | the urgent line, the timer thread, worker supervision, and health aggregation start; the lifecycle moves to `Booting` complete | `Kernel`: unwind, exit | 0.3 |
+| 15 | `Kernel` | this crate | the kernel is connected to the log and the metrics (urgent changes, worker restarts and failures, reloads), the reloader is set up, and the foundation is built; workers and timers can be started from here (the timer thread starts with the first timer) | `Kernel`: unwind, exit | 0.3 |
 | 16 | `Subsystems` | the application | each registered subsystem is started in ascending `Position`, ties in registration order | `Subsystem`: unwind, exit | 0.4 |
-| 17 | `Ready` | this crate | `on_ready` callbacks run; `READY=1` to systemd when `NOTIFY_SOCKET` is set; the phase becomes `Ready`; `start` returns | `Subsystem` (an `on_ready` failure): unwind, exit | 0.3 |
+| 17 | `Ready` | this crate | `on_ready` callbacks run; the phase becomes `Ready`; `READY=1` and `STATUS=ready` to systemd when `NOTIFY_SOCKET` is set, and the `WATCHDOG=1` keep-alive starts when systemd asked for one; the reload and dump signals are connected; `start` returns | `Subsystem` (an `on_ready` failure): unwind, exit | 0.3 |
 
 ### Why each step is where it is
 
@@ -109,14 +109,14 @@ A stop is requested by a stop signal, `System::request_stop`, a critical worker 
 | # | Step | What happens | Since |
 |---|---|---|---|
 | 1 | `Draining` | the phase becomes `Draining`; the urgent line is raised to `Draining` (every worker sees it at its next checkpoint, every subsystem's mailbox is poked); `STOPPING=1` to systemd | 0.3 |
-| 2 | subsystems | stopped one at a time in the reverse of their start order, each given the remaining shutdown deadline minus the member reserve | 0.4 |
+| 2 | subsystems | stopped one at a time in the reverse of their start order, each on a stop thread and given the remaining shutdown deadline minus the member reserve; one log line per subsystem with its stop time, or that it was abandoned | 0.4 |
 | 3 | `Stopping` | the urgent line is raised to `Stopping`; workers are asked to stop and joined; the timer thread stops | 0.4 |
 | 4 | registry | event handlers are cleared and waited for, so none runs while members close | 0.5 |
 | 5 | audit | the chain is flushed and synced to disk | 0.5 |
-| 6 | metrics | a final export, when an exporter is configured; process-wide registries stay readable | 0.4 |
+| 6 | metrics | a final export, when an exporter is configured (the suite configures none in 0.4); process-wide registries stay readable | 0.4 |
 | 7 | secrets | the vault is dropped, which wipes every secret | 0.5 |
 | 8 | signals | the signal intake is uninstalled; a further signal gets the operating system's default action | 0.3 |
-| 9 | logging | the shutdown report (one line per subsystem with its stop time and whether it met the deadline), the exit code, then flush and close | 0.3 |
+| 9 | logging | the last line (the exit code and the uptime), then flush and close | 0.3 |
 | 10 | `Stopped` | the phase becomes `Stopped`; the panic hook is removed (the previous one is put back); `run` returns the exit code; the guard is dropped, releasing the lock | 0.3 |
 
 ### Why each step is where it is
@@ -136,18 +136,18 @@ A stop is requested by a stop signal, `System::request_stop`, a critical worker 
 
 - The **shutdown deadline** (default 25 s, `Builder::shutdown_deadline` or `[kernel] shutdown_deadline`) covers steps 1 to 9. The default is below Kubernetes' default 30 s grace period and systemd's 90 s `TimeoutStopSec`, so the suite's own deadline fires first and reports which part was late instead of being killed silently.
 - The **member reserve** (default 2 s, `[kernel] member_reserve`) is kept back from the subsystems for steps 4 to 9, so a slow subsystem cannot take the time the audit sync and the log flush need.
-- A subsystem that does not return from `stop` by its deadline is **abandoned**: its thread cannot be killed safely, so it is left running, reported in the log and in the shutdown report, the next subsystem is stopped, and the exit code becomes `79` (`exit::DEADLINE`) (threat T6).
+- A subsystem that does not return from `stop` by its deadline is **abandoned**: its thread cannot be killed safely, so it is left running, reported in the log, the next subsystem is stopped, and the exit code becomes `79` (`exit::DEADLINE`) (threat T6). A subsystem stopped after the subsystems' part of the deadline is spent is still asked to stop and given 100 ms from the member reserve, never past the whole deadline (D-047).
 - A worker that does not exit by the time the deadline is reached is abandoned the same way.
 
 ## Reload
 
 A reload (SIGHUP on Unix, `System::reload`, or a Windows service `PARAMCHANGE` once signal-mod supports it) does not change the lifecycle phase:
 
-1. the configuration file is read and validated as in boot step 5; secret references are resolved as in step 8;
-2. every member that supports a live change (log level and filters, metrics limits, kernel deadlines) and every subsystem prepares its change and returns a commit; nothing is applied yet;
-3. if every preparation succeeded, the new configuration snapshot is published and every commit runs; otherwise nothing changes, the old configuration stays, and the refusal is logged (threat T7).
+1. the configuration file is read and validated as in boot step 5 (with `config_str`, the same text is read again); secret references are resolved as in step 8 (from 0.5; refused in 0.4);
+2. every subsystem prepares its change and returns a commit; nothing is applied yet;
+3. if every preparation succeeded, the new configuration snapshot is published (version + 1), the suite's own live settings change (in 0.4, the `[kernel]` deadlines), and every commit runs; otherwise nothing changes, the old configuration stays, and the refusal is logged and counted (threat T7).
 
-Settings that cannot change while running (paths, the guard, sink files) are reported as "takes effect at restart" and do not fail the reload.
+Reloads are serialised, and a reload after a stop request is refused (`Stopping`). Settings that cannot change while running (paths, the guard, the log sinks and level, the metrics limits, the ids) are reported as "takes effect at restart" and do not fail the reload.
 
 ## Crash
 

@@ -158,10 +158,11 @@ pub(crate) fn parse(text: &str, source: Option<&Path>, version: u64) -> Result<C
 }
 
 /// Reads a file the process trusts for configuration: refused when another
-/// user can change it (Unix), or when it is larger than 1 MiB.
+/// user can change it (Unix; checked on the opened file, D-049), or when it
+/// is larger than 1 MiB.
 pub(crate) fn read_checked(path: &Path, what: &str) -> Result<String, Error> {
-    crate::secure_file::check(path, what)?;
     let file = fs::File::open(path).map_err(|e| io_error(path, what, &e))?;
+    crate::secure_file::check_open(&file, path, what)?;
     let mut text = String::new();
     let read = file
         .take(MAX_FILE_BYTES + 1)
