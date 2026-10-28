@@ -488,9 +488,62 @@ impl System {
     /// `79` if a step missed the shutdown deadline.
     #[cfg(feature = "kernel")]
     pub fn run(self) -> ExitCode {
-        let reason = self.wait_for_stop();
+        #[cfg(all(windows, feature = "signals"))]
+        let system = match self.run_as_service() {
+            Ok(code) => return code,
+            Err(system) => *system,
+        };
+        #[cfg(not(all(windows, feature = "signals")))]
+        let system = self;
+        let reason = system.wait_for_stop();
         let cause = reason.to_string();
-        self.finish(reason.exit_code(), &cause)
+        system.finish(reason.exit_code(), &cause)
+    }
+
+    /// On Windows, offers the main thread to the service control manager
+    /// (signal-mod's `service::run`): reports `RUNNING`, waits for a stop,
+    /// reports `STOP_PENDING` with the shutdown deadline, runs the
+    /// shutdown, and reports `STOPPED` with the exit code. When the process
+    /// was not started as a service (or may not touch process-wide state),
+    /// the system comes back to run in the foreground.
+    #[cfg(all(windows, feature = "signals"))]
+    fn run_as_service(self) -> Result<ExitCode, Box<System>> {
+        use std::sync::{
+            Mutex, PoisonError,
+            atomic::{AtomicU8, Ordering},
+        };
+
+        if !self.parts.settings.process_wide
+            || self.parts.settings.is_disabled(crate::Member::Signals)
+        {
+            return Err(Box::new(self));
+        }
+        let name = self.name().to_owned();
+        let slot = Arc::new(Mutex::new(Some(self)));
+        let exit = Arc::new(AtomicU8::new(crate::exit::OK));
+        let (service_slot, service_exit) = (Arc::clone(&slot), Arc::clone(&exit));
+        // An error (most often: not started by the service manager) leaves
+        // the system unused, and it runs in the foreground.
+        let _ran = signal_mod::service::run(&name, move |status| {
+            let taken = service_slot
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            let Some(system) = taken else {
+                return u32::from(crate::exit::SOFTWARE);
+            };
+            let _reported = status.running();
+            let reason = system.wait_for_stop();
+            let _reported = status.stopping(system.parts.shutdown_budget());
+            let code = system.finish_code(reason.exit_code(), &reason.to_string());
+            service_exit.store(code, Ordering::Release);
+            u32::from(code)
+        });
+        let unused = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+        match unused {
+            Some(system) => Err(Box::new(system)),
+            None => Ok(ExitCode::from(exit.load(Ordering::Acquire))),
+        }
     }
 
     /// Parks the calling thread until a stop is requested and returns why.
@@ -516,9 +569,13 @@ impl System {
         self.finish(code, &cause)
     }
 
-    fn finish(mut self, code: u8, cause: &str) -> ExitCode {
+    fn finish(self, code: u8, cause: &str) -> ExitCode {
+        ExitCode::from(self.finish_code(code, cause))
+    }
+
+    fn finish_code(mut self, code: u8, cause: &str) -> u8 {
         self.finished = true;
-        ExitCode::from(self.parts.teardown(code, cause))
+        self.parts.teardown(code, cause)
     }
 }
 

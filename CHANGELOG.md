@@ -13,6 +13,54 @@
 
 ---
 
+## [0.5.0] - 2026-10-28
+
+Feature complete: every member wired, secrets resolved into a vault, a
+tamper-evident audit chain, kernel events, and Windows service control.
+
+### Added
+
+- Audit (feature `audit`, audit-trail 1.1): `AuditLog` (`record`, `sync`,
+  `path`, `next_id`, `is_enabled`), `Foundation::audit`, boot step 13
+  (the chain is verified before the first new record; `AuditTampered`
+  stops the boot), `[audit]` (`enabled`, `file`, `hash`, `sync`,
+  `repair_tail`), the `audit-blake3` pass-through. The kernel records
+  reloads, lockdowns, and stops. Shutdown step 5 syncs the chain.
+- Secrets (feature `secrets`, key-vault 1.1): boot step 8 resolves `env:`,
+  `file:`, and `vault:` references into a page-locked vault;
+  `Config::secret` and `config::Secret` (`name`, `with`);
+  `Builder::on_vault`; `Foundation::vault`; `[secrets] allow_plain`. A
+  plain value under a key that marks a secret is refused (`PlainSecret`).
+  Reloads resolve again without changing what the version in force
+  reads; shutdown step 7 wipes the values.
+- Events (feature `registry`, registry-io 1.1): `kernel::Event` (phase,
+  urgent, reload, worker, subsystem stop), `Foundation::events`, boot step
+  14, shutdown step 4.
+- `system_suite::foundation()` (feature `globals`, global-lib 1.0).
+- Randomness (feature `rand`, mod-rand 1.0): boot step 2 checks the OS
+  random source (`Entropy`); backoff jitter from mod-rand.
+- Windows service control (signal-mod 2.1): `System::run` hands the main
+  thread to the service control manager when started by it; stop,
+  shutdown, and preshutdown stop; parameter change reloads; control code
+  128 dumps.
+- `ErrorKind::{Entropy, PlainSecret, Audit, AuditTampered, Disabled}`.
+- Member modules `audit`, `registry`, `global`, `rand`, `vault`.
+- `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`, `docs/PLATFORM-NOTES.md`.
+- CI: every member feature alone, built, linted, and tested on Linux,
+  macOS, and Windows.
+
+### Changed
+
+- `audit`, `registry`, and `secrets` imply `kernel`; `secrets` implies
+  `config` and `rand`.
+- With `secrets`, a secret reference is resolved at step 8 instead of
+  being refused at step 5.
+
+### Moved
+
+- The memory watermark (urgent line to `Shed` under memory pressure) to
+  0.6: it needs sys-lib 0.4.0, not yet published.
+
 ## [0.4.0] - 2026-10-28
 
 Extended: configuration, metrics, the application's subsystems, and the
@@ -214,7 +262,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jamesgober/system-suite/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/system-suite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/system-suite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/system-suite/compare/v0.1.0...v0.2.0

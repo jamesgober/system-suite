@@ -155,6 +155,12 @@ impl Parts {
         self.sections.clone()
     }
 
+    /// The whole shutdown deadline in force.
+    #[cfg(all(windows, feature = "signals"))]
+    pub(crate) fn shutdown_budget(&self) -> Duration {
+        self.deadlines().0
+    }
+
     /// The shutdown deadline and member reserve: the builder's, else the
     /// configuration's, else the defaults.
     fn deadlines(&self) -> (Duration, Duration) {

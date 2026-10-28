@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "system-suite"
-version = "0.4.0"
+version = "0.5.0"
 
 # Minimum Supported Rust Version (MSRV)
 # 1.89: the highest MSRV among the members (sys-lib needs `File::lock` and
@@ -188,7 +188,7 @@ metrics-lib = { version = "2.0", optional = true, default-features = false, feat
 # Signals without an async runtime: the `agnostic` back-end only (never
 # `tokio`, D-005). Brings signal-hook and libc on Unix and windows-sys on
 # Windows (reviewed and accepted, dev/PLAN.md section 12.4, D-032).
-signal-mod = { version = "2.0", optional = true, default-features = false, features = ["std", "agnostic"] }
+signal-mod = { version = "2.1", optional = true, default-features = false, features = ["std", "agnostic", "service"] }
 
 # Monotonic and wall clocks, mockable. First-party, no dependencies.
 clock-lib = { version = "1.1", optional = true, default-features = false, features = ["std"] }

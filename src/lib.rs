@@ -33,7 +33,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! system-suite = { version = "0.4", default-features = false, features = ["sys"] }
+//! system-suite = { version = "0.5", default-features = false, features = ["sys"] }
 //! ```
 //!
 //! ```ignore
@@ -57,11 +57,12 @@
 //!
 //! ## Status
 //!
-//! `0.4`: configuration with two-phase reload, metrics, subsystems, the
-//! urgent line, supervised workers, timers, and health. Audit, the event
-//! registry, globals, randomness, and secrets arrive in `0.5`. The public
-//! API is in `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in
-//! the [repository](https://github.com/jamesgober/system-suite)).
+//! `0.5`: feature complete. Configuration with secret references and
+//! two-phase reload, metrics, audit, kernel events, subsystems, the urgent
+//! line, supervised workers, timers, health, and Windows service control.
+//! Measured performance arrives in `0.6`. The public API is in
+//! `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in the
+//! [repository](https://github.com/jamesgober/system-suite)).
 
 #![doc(html_root_url = "https://docs.rs/system-suite")]
 #![cfg_attr(docsrs, feature(doc_cfg))]

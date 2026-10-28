@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: extended (<code>0.4.0</code>).</strong> A service boots with one call, reads its configuration (and reloads it on SIGHUP, all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, reports health, and stops in order on SIGTERM, SIGINT, or Ctrl+C within a deadline. Audit, registry, globals, randomness, and secrets arrive in <code>0.5.0</code>. The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: feature complete (<code>0.5.0</code>).</strong> A service boots with one call, reads its configuration (secrets as references resolved into a page-locked vault; reloaded all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, keeps a tamper-evident audit chain, reports health, and stops in order on a signal or a Windows service stop within a deadline. Measured performance arrives in <code>0.6.0</code>. The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -40,11 +40,11 @@
 
 ```toml
 [dependencies]
-system-suite = "0.4"
+system-suite = "0.5"
 
 [build-dependencies]
 # Optional: the build commit and time in the first log line.
-system-suite = { version = "0.4", default-features = false, features = ["sys"] }
+system-suite = { version = "0.5", default-features = false, features = ["sys"] }
 ```
 
 ```rust
