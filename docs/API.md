@@ -155,20 +155,21 @@ A member's own optional features are available through the suite, so a project s
 | `metrics-histogram`, `metrics-meter` | metrics-lib's histogram and summary, rate meter | none | 0.4 |
 | `metrics-statsd` | metrics-lib's StatsD and DogStatsD push (std UDP) | none | 0.4 |
 | `metrics-http` | metrics-lib's blocking `/metrics` server and Pushgateway client (std TCP) | none | 0.4 |
-| `log-bridge` | log-io's `log`: records from crates that use the `log` facade go to the suite's logger | log | when reviewed (D-040) |
-| `log-tracing` | log-io's `tracing`: a `tracing` subscriber that writes through log-io | tracing-core, tracing-subscriber | when reviewed (D-040) |
-| `config-json`, `config-toml`, `config-noml`, `config-xml` | config-lib's formats of the same names | serde_json; noml, indexmap; noml, indexmap; quick-xml | when reviewed (D-050) |
-| `config-validation` | config-lib's rule-based validation | regex | when reviewed (D-050) |
-| `metrics-otlp`, `metrics-json` | metrics-lib's OTLP rendering, JSON rendering | serde, serde_json | when reviewed (D-050) |
-| `metrics-tracing` | metrics-lib's tracing integration | tracing | when reviewed (D-050) |
-| `metrics-system` | metrics-lib's process metrics (`process_*`) and host health; `[metrics] process` | sysinfo (the BSDs only) | when reviewed (D-050) |
+| `log-bridge` | log-io's `log`: records from crates that use the `log` facade go to the suite's logger (installed at boot step 10 in process-wide mode, D-057) | log | 0.4 |
+| `log-tracing` | log-io's `tracing`: `system_suite::log::compat::TracingLayer`, a `tracing-subscriber` layer that writes through log-io; the application adds it to its own subscriber (D-057) | tracing-core, tracing-subscriber | 0.4 |
+| `metrics-tracing` | metrics-lib's tracing integration | tracing | 0.4 |
+| `config-toml`, `config-noml` | config-lib's TOML and NOML formats: `<name>.toml`, `<name>.noml` (D-059) | noml, indexmap | 0.4 |
+| `config-json`, `config-xml` | config-lib's formats of the same names | serde_json; quick-xml | waiting on first-party crates (D-056) |
+| `config-validation` | config-lib's rule-based validation | regex | waiting on first-party crates (D-056) |
+| `metrics-otlp`, `metrics-json` | metrics-lib's OTLP rendering, JSON rendering | serde, serde_json | waiting on first-party crates (D-056) |
+| `metrics-system` | metrics-lib's process metrics (`process_*`) and host health; `[metrics] process` | sysinfo (the BSDs only) | not accepted (D-056) |
 | `audit-blake3` | audit-trail's BLAKE3 hasher (selected with `[audit] hash = "blake3"`) | blake3 | 0.5 |
 | `registry-async` | registry-io's `AsyncRegistry` (runtime-agnostic futures, no executor) | futures-core | 0.5 |
 | `secrets-keychain` | key-vault's OS keychain fetcher | keyring; on Linux its Secret Service back-end runs async-io's reactor thread, so this one is decided against the register when key-vault is wired | 0.5 |
 
 Not passed through: anything that brings an async runtime (signal-mod's `tokio`, metrics-lib's `async`, config-lib's `async`, key-vault's TPM stub), and config-lib's `hot-reload` (an idle watcher thread; the suite reloads by signal or call).
 
-A pass-through marked "when reviewed" brings a third-party crate that is not yet in the dependency register; it is added in the release after the crate is reviewed and accepted (D-032). A project can also reach any member feature directly: adding the member with the feature it wants (`metrics-lib = { version = "2", default-features = false, features = ["http"] }`) works too, because Cargo merges the features of one crate version, so `system_suite::metrics` gets it. The pass-through is the same thing without the second line and without having to match the member's version by hand.
+A pass-through marked "waiting on first-party crates" brings a third-party crate that James has held until a first-party crate covers the same ground (D-056); it is not added before then. A project can also reach any member feature directly: adding the member with the feature it wants (`metrics-lib = { version = "2", default-features = false, features = ["http"] }`) works too, because Cargo merges the features of one crate version, so `system_suite::metrics` gets it. The pass-through is the same thing without the second line and without having to match the member's version by hand.
 
 ### Build info in `build.rs`
 
@@ -1432,7 +1433,7 @@ A named thread the kernel supervises: the services' own housekeeping (log shippi
 
 - `run` is called on the worker's thread. Returning `Ok(())` ends the worker (restarted only under `Restart::Always`, and never once a stop was requested). Returning `Err` or panicking is a failure: it is logged and counted, and the worker restarts per its policy after its backoff.
 - A worker that fails more than its budget allows within the window is marked `Failed` and reported `Unhealthy`. If it is `critical`, the kernel requests a stop with `StopReason::WorkerFailed` (exit code 70).
-- With `heartbeat(every)`, a worker that has not called `heartbeat()` for three periods is reported `Degraded` (the heartbeat word is written only by the worker; `loom` tests wait for loom's review, D-051).
+- With `heartbeat(every)`, a worker that has not called `heartbeat()` for three periods is reported `Degraded` (the heartbeat word is written only by the worker, and model-checked with `loom`, D-058).
 - At shutdown step 3 every worker is asked to stop (`should_stop()` becomes true and `park` returns) and joined within the deadline; one that does not return is abandoned and reported.
 - Under `panic = "abort"` a panic ends the process after the crash report; restarts on panic apply to `panic = "unwind"` builds.
 
@@ -1629,7 +1630,7 @@ The first that applies wins:
 
 1. `Builder::config_file(path)` or `Builder::config_str(text)`;
 2. the `<NAME>_CONFIG` variable (from the process environment or the `.env` file);
-3. `<config dir>/<name>.conf` (with `config-toml` or `config-noml`, also `<name>.toml` or `<name>.noml`; finding two is a `ConfigInvalid` error naming both);
+3. `<config dir>/<name>.conf` (with `config-toml` or `config-noml`, also `<name>.toml` or `<name>.noml`; finding two is a `ConfigInvalid` error naming both; the format follows the extension, D-059);
 4. `./<name>.conf` (and the same alternatives) in the working directory, only when the process is not running as root or an administrator (a working directory is easy to influence; a privileged service must name its file).
 
 In cases 1 and 2 a missing file is an error. In cases 3 and 4 a missing file means "no file": every section takes its defaults and the first log lines say where the configuration came from. Before parsing, the file's owner and permissions are checked on the opened file, so the file checked is the file read (the 0.2 defence idea, D-020, and the 0.4 one, D-049): on Unix a file that is group- or world-writable, or owned by a user other than the service user or root, is refused with `ConfigInsecure`. There is no switch to accept such a file (D-048): the fix is `chmod 640` (or `600`) and, if needed, `chown`. The `.env` file is checked the same way before it is read, because it can name the configuration file. A file over 1 MiB is refused with `ConfigInvalid`. A parse error names the line and column and never quotes the text, which may hold a secret.
@@ -1643,7 +1644,7 @@ Every section is optional and every key has a secure default. The complete refer
 | `[guard]` | `lock` (`true`), `lock_dir` (the runtime directory), `allow_network_lock` (`false`), `umask` (`"0027"`), `open_files_target` (`65536`), `open_files_minimum` (`1024`) | 0.4 |
 | `[log]` | `level` (`"info"`), `filter`, `format` (`"auto"`: `"human"` on a terminal, `"json"` otherwise; or `"logfmt"`), `stderr` (`true`), `file` (`true` when a log directory exists), `max_bytes`, `rotation` (`"daily"`; `"hourly"`, `"never"`), `max_files` (`14`), `redact` (list, `["a", "b"]`), `redact_common` (`true`), `recent_lines` (`64`, for crash reports) | 0.4 |
 | `[crash]` | `enabled` (`true`), `max_reports` (`8`) | 0.4 |
-| `[metrics]` | `enabled` (`true`), `max_series` (`10000`); `process` arrives with `metrics-system` (D-050) | 0.4 |
+| `[metrics]` | `enabled` (`true`), `max_series` (`10000`); `process` would come with `metrics-system`, not accepted (D-056) | 0.4 |
 | `[kernel]` | `shutdown_deadline` (`"25s"`), `member_reserve` (`"2s"`), `notify` (`"auto"`), `reload_signal` (`true`), `dump_signal` (`true`) | 0.4 |
 | `[ids]` | `worker` (`0`; 0 to 1023), `epoch` (milliseconds since 1970; id-forge's default) | 0.4 |
 | `[audit]` | `enabled` (`true` when compiled in), `file` (`<data dir>/audit/<name>.audit`), `hash` (`"sha256"`), `sync` (`"every"`; or `"flush"`) | 0.5 |

@@ -46,10 +46,11 @@ Exit: configuration loads, validates, and reloads (T7); subsystems register and 
 - Moved to 0.5 (D-031): resolving secret references (FR-16) and the T2 tests. Resolution goes through key-vault (D-025), which this roadmap already wires in 0.5; resolving references in 0.4 would mean pulling key-vault forward or resolving them without it.
 - [x] metrics-lib wired (global registry in process-wide mode, D-053); kernel metrics (boot time, urgent level, worker restarts and failures, subsystem errors, reloads); pass-throughs `metrics-histogram`, `metrics-meter`, `metrics-statsd`, `metrics-http`.
 - [x] Urgent line (T0, T1); `Subsystem` trait, `Position`, `Link`, `Mailbox`, `Failure`, `Commit`; `Boot`; `Snapshot` and `Reader`.
-- Moved (D-051): the `loom` model tests of the urgent line and heartbeats, until `loom` is reviewed into the register. 0.4 tests the same invariants with std threads under contention.
+- [x] `loom` model tests of the urgent line's word and the worker heartbeat, in their own CI job (D-056, D-058).
 - [x] Workers with restart policies, backoff, budgets, criticality, heartbeats; timers (a min-heap, D-046).
 - [x] T6 at the subsystem level: a subsystem whose `stop` never returns is abandoned at the deadline, exit code 79, and the subsystem started before it is still stopped (D-044, D-047).
-- Moved again (D-040, D-050): the `log-bridge` and `log-tracing` pass-throughs, and `config-json`, `config-toml`, `config-noml`, `config-xml`, `config-validation`, `metrics-otlp`, `metrics-json`, `metrics-tracing`, `metrics-system` (with `[metrics] process`). Each brings a crate that is not yet in the dependency register; the review was asked for on 2026-10-23 and 2026-10-26 and is not answered. Each ships in the release after its crates are accepted.
+- [x] `log-bridge`, `log-tracing`, `metrics-tracing`, `config-toml`, `config-noml` (accepted by James, D-056; the bridge installed at step 10, D-057; the format by extension, D-059).
+- Held by James (D-056): `config-json`, `config-xml`, `config-validation`, `metrics-json`, `metrics-otlp` wait on first-party crates that cover `serde_json`, `quick-xml`, and `regex`; `metrics-system` (with `[metrics] process`) stays out because `sysinfo` was not accepted.
 - [x] Health aggregation; `sd_notify` readiness, status, and the watchdog keep-alive (`WATCHDOG_USEC`).
 
 ## v0.5.0 - Feature complete

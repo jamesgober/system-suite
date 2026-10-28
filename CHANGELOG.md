@@ -13,7 +13,7 @@
 
 ---
 
-## [0.4.0] - 2026-10-26
+## [0.4.0] - 2026-10-28
 
 Extended: configuration, metrics, the application's subsystems, and the
 kernel's services.
@@ -55,6 +55,13 @@ kernel's services.
   `metrics` module, and the kernel's own metrics (`system_suite_*`);
   pass-throughs `metrics-histogram`, `metrics-meter`, `metrics-statsd`,
   `metrics-http`.
+- Opt-in interop and formats (accepted by James, D-056): `log-bridge`
+  (records from the `log` facade go to the suite's logger), `log-tracing`
+  (`log::compat::TracingLayer`), `metrics-tracing`, `config-toml` and
+  `config-noml` (`<name>.toml`, `<name>.noml`; the format follows the
+  extension, and two candidate files are refused).
+- `loom` model tests of the urgent line and worker heartbeats, in their own
+  CI job (`cfg(loom)`, development only).
 - `System::request_stop`, `System::runtime`, `Foundation::runtime`,
   `Builder::member_reserve`.
 - systemd: `STATUS=` lines and the `WATCHDOG=1` keep-alive when
@@ -85,8 +92,9 @@ kernel's services.
 
 - `[config] allow_insecure_file` from the design: there is no switch to
   accept a configuration file another user can change (D-048).
-- `[metrics] process` and the pass-throughs that bring crates not yet in
-  the dependency register wait for that review (D-050).
+- `[metrics] process` (it needs `sysinfo`, which was not accepted), and
+  `config-json`, `config-xml`, `config-validation`, `metrics-json`,
+  `metrics-otlp`, which wait on first-party crates (D-056).
 
 ---
 

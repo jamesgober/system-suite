@@ -440,22 +440,23 @@ Every third-party crate the suite brings, and why it is acceptable (D-032). Revi
 | `sha2` (+ `digest`, `block-buffer`, `crypto-common`, `cpufeatures`, `cfg-if`) | audit-trail | `audit` | RustCrypto; audited, constant-time where it matters | the audit chain's hash; never written in-house | none |
 | `blake3` | audit-trail, key-vault | `audit-blake3`, `secrets` | the BLAKE3 authors | alternative audit hash; key-vault's normalisation | none |
 | `subtle`, `zeroize`, `getrandom` 0.2 | key-vault | `secrets` | dalek-cryptography, RustCrypto, rust-random | constant-time comparison, wiping, OS randomness for the vault | getrandom 0.2 is the older line |
+| `log` 0.4 | log-io | `log-bridge` (opt-in) | rust-lang; the ecosystem's logging facade | interop: records from crates that log through the facade reach the suite's logger. Accepted by James, 2026-10-28 (D-056) | none |
+| `tracing-core`, `tracing-subscriber` 0.3 (default features off, `std` only; + `once_cell`) | log-io | `log-tracing` (opt-in) | tokio-rs; the ecosystem's tracing core | interop: `TracingLayer` writes `tracing` events through log-io. Accepted by James, 2026-10-28 (D-056) | `tracing-subscriber`'s `registry` feature is not enabled (D-057) |
+| `tracing` 0.1 (default features off, `std`; + `pin-project-lite`) | metrics-lib | `metrics-tracing` (opt-in) | tokio-rs | interop: span-wrapped timing. Accepted by James, 2026-10-28 (D-056) | none |
+| `noml` (pinned `=0.9.2` by config-lib) + `indexmap` 2 (+ `equivalent`, `hashbrown` 0.17, `thiserror` 2 at build time) | config-lib | `config-toml`, `config-noml` (opt-in) | James Gober (noml) and the indexmap maintainers | James's own crate; TOML and NOML configuration files. Accepted by James, 2026-10-28 (D-056) | a second `hashbrown` and `thiserror` version in a build with both (cargo-deny warns) |
+| `loom` 0.7 | the suite's tests | `cfg(loom)` development builds only | tokio-rs; the standard permutation tester | model tests of the urgent line and worker heartbeats; never in a build of the crate. Accepted by James, 2026-10-28 (D-056) | its own tree (`generator`, `scoped-tls`, `tracing`) exists only in `--cfg loom` test builds |
 
 Not accepted: any async runtime (tokio, async-std) in any feature, including signal-mod's default `tokio` feature and metrics-lib's `async` (D-005); `notify` (config-lib's default `hot-reload`; the suite reloads by signal or call, so it would be an idle watcher thread for nothing).
 
-Waiting for review (asked 2026-10-23 and 2026-10-26; each pass-through below ships in the release after its crates are accepted, D-040, D-050, D-051):
+Held by James on 2026-10-28 (D-056): these pass-throughs wait on first-party crates that cover the same ground, and are not added until then.
 
-| Crate | Would be brought by | Pass-through or use |
+| Crate | Would be brought by | Pass-through |
 |---|---|---|
-| `log` | log-io | `log-bridge` |
-| `tracing-core`, `tracing-subscriber` | log-io | `log-tracing` |
-| `tracing` | metrics-lib | `metrics-tracing` |
 | `serde_json` | config-lib, metrics-lib | `config-json`, `metrics-otlp`, `metrics-json` |
-| `noml` (pinned), `indexmap` | config-lib | `config-toml`, `config-noml` |
 | `quick-xml` | config-lib | `config-xml` |
 | `regex` | config-lib | `config-validation` |
-| `sysinfo` (the BSDs only) | metrics-lib's `system` | `metrics-system` and `[metrics] process` |
-| `loom` (development only) | the suite's tests | model tests of the urgent line and worker heartbeats |
+
+Not accepted in the 2026-10-28 decision (only the crates above the line were): `sysinfo` (the BSDs only), which metrics-lib's `system` feature brings, so `metrics-system` and `[metrics] process` stay out (D-056).
 
 ### 12.5 Member features passed through
 
@@ -589,3 +590,7 @@ README (Tier 1 first), `docs/API.md` (metrics-lib format), `docs/ARCHITECTURE.md
 | D-053 | 2026-10-26 | The metrics registry is metrics-lib's global one when the system may touch process-wide state; if another part of the process set it up first, that one is used and a warning logged; otherwise (and with `Member::Metrics` disabled or `[metrics] enabled = false`) the system has its own registry, which nothing exports. The kernel's metrics are named `system_suite_*` (listed in the `kernel::metrics` module documentation) | metrics-lib's global is set once (D-010); refusing to boot because a library touched it first would punish the application for a dependency's choice, and the warning says which settings were kept; a disabled member still has its accessor (API) |
 | D-054 | 2026-10-26 | In 0.4 a reload changes only the `[kernel]` deadlines live; every other suite section is logged as "takes effect at restart". The new configuration is read again from the same source (`config_str` included) | the log sinks, guard, ids, and metrics limits are built once at boot by their members, which have no live-change API yet; reporting them is honest, failing the reload for them would block every other change |
 | D-055 | 2026-10-26 | The `.env` file's default place is `<config dir>/.env` through path-lib's hardened join (as in 0.3), checked like the configuration file before env-lib opens it; a `CONFIG` key in it (with or without the `<NAME>_` prefix) names the configuration file only when the process environment does not | the 0.2 design-lock defence idea; the process environment wins because it is set by whoever started the process |
+| D-056 | 2026-10-28 | **James:** "accept only: loom (dev-only), noml + indexmap (my own crate), and the log / tracing-core + tracing-subscriber / tracing bridges (opt-in interop). Hold serde_json, quick-xml and regex until my own crates cover them." So 0.4 adds `log-bridge`, `log-tracing`, `metrics-tracing`, `config-toml`, `config-noml` (each opt-in) and the `loom` model tests (`cfg(loom)`, development only); `config-json`, `config-xml`, `config-validation`, `metrics-json`, and `metrics-otlp` wait on first-party crates; `sysinfo` was not accepted, so `metrics-system` stays out | James's call on the dependency register (D-032); the accepted crates are opt-in interop or his own, and none is in a default build |
+| D-057 | 2026-10-28 | With `log-bridge`, boot step 10 installs log-io's `LogBridge` as the `log` crate's logger when the system may touch process-wide state; one already installed is kept and a warning logged. With `log-tracing`, the suite installs no `tracing` subscriber: `system_suite::log::compat::TracingLayer::new(foundation.log().clone())` goes into the application's own subscriber stack | the `log` logger is set once, like log-io's global (D-010); a `tracing` layer needs a span-storing subscriber (`tracing-subscriber`'s `registry`, which brings crates outside D-056), and the subscriber stack is the application's to compose |
+| D-058 | 2026-10-28 | The loom model tests run with `RUSTFLAGS="--cfg loom" cargo test --lib --release --no-default-features --features kernel loom_`, in their own CI job; the atomics they check come from `crate::sync` (std's, or loom's under `cfg(all(loom, test))`), so the tests check the shipped code. Only the `kernel` feature is built because clock-lib also reads `cfg(loom)` and does not build as a dependency under it | the urgent line's word and the heartbeat are the only lock-free parts; a mutation (relaxed epoch orderings) was confirmed to fail the reader test, so the tests are not vacuous |
+| D-059 | 2026-10-28 | The configuration format follows the file's extension: `.toml` and `.noml` with their feature, `conf` for anything else; `config_str` is always `conf`. A `.toml` or `.noml` file without its feature is `ConfigInvalid` naming the feature. Finding two candidates (`site.conf` and `site.toml`) in one place is `ConfigInvalid` naming both | as designed in D-018; an extension is explicit, guessing between two files is not |
