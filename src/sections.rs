@@ -13,6 +13,7 @@ pub(crate) struct Sections {
     pub(crate) metrics: Metrics,
     pub(crate) kernel: Kernel,
     pub(crate) ids: Ids,
+    pub(crate) audit: Audit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -92,6 +93,23 @@ pub(crate) struct Ids {
     pub(crate) epoch_ms: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuditHash {
+    Sha256,
+    Blake3,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Audit {
+    pub(crate) enabled: bool,
+    pub(crate) file: Option<PathBuf>,
+    pub(crate) hash: AuditHash,
+    /// `sync = "every"`: on disk before `record` returns; `"flush"`: synced
+    /// every second and at shutdown.
+    pub(crate) sync_every: bool,
+    pub(crate) repair_tail: bool,
+}
+
 impl Default for Sections {
     fn default() -> Self {
         Sections {
@@ -127,6 +145,13 @@ impl Default for Sections {
             ids: Ids {
                 worker: 0,
                 epoch_ms: None,
+            },
+            audit: Audit {
+                enabled: true,
+                file: None,
+                hash: AuditHash::Sha256,
+                sync_every: true,
+                repair_tail: false,
             },
         }
     }

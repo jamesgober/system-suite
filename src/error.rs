@@ -322,6 +322,27 @@ pub enum ErrorKind {
     /// set directly, or any change after a stop. Use a stop request. Exit
     /// code 70.
     UrgentRefused,
+    /// The OS random source is unavailable (a sandbox or seccomp filter
+    /// blocks it); checked at boot step 2 when `rand` or `secrets` is
+    /// compiled in. Allow `getrandom` / `BCryptGenRandom`. Exit code 69.
+    Entropy,
+    /// A key whose name marks a secret (`password`, `token`, `secret`, ...)
+    /// holds a plain value instead of a reference. Replace it with
+    /// `env:NAME`, `file:/path`, or `vault:name`, or set
+    /// `[secrets] allow_plain = true`. Exit code 78.
+    PlainSecret,
+    /// The audit file cannot be opened, read, written, or synced, or its last
+    /// record was cut short (a crash while writing). The message names the
+    /// file and what to do. Exit code 74.
+    Audit,
+    /// The existing audit chain fails verification: a record was changed,
+    /// removed, or reordered. Do not delete the file: keep it as evidence,
+    /// move it aside, and investigate. The message names the first bad
+    /// record. Exit code 65.
+    AuditTampered,
+    /// An operation on a member disabled at run time (`Builder::disable`).
+    /// Enable it, or do not call it. Exit code 70.
+    Disabled,
 }
 
 impl ErrorKind {
@@ -345,7 +366,12 @@ impl ErrorKind {
             ErrorKind::Metrics
             | ErrorKind::Subsystem
             | ErrorKind::Stopping
-            | ErrorKind::UrgentRefused => exit::SOFTWARE,
+            | ErrorKind::UrgentRefused
+            | ErrorKind::Disabled => exit::SOFTWARE,
+            ErrorKind::Entropy => exit::UNAVAILABLE,
+            ErrorKind::PlainSecret => exit::CONFIG,
+            ErrorKind::Audit => exit::IOERR,
+            ErrorKind::AuditTampered => exit::DATAERR,
         }
     }
 }
@@ -425,6 +451,11 @@ mod tests {
         assert_eq!(ErrorKind::Subsystem.exit_value(), 70);
         assert_eq!(ErrorKind::Stopping.exit_value(), 70);
         assert_eq!(ErrorKind::UrgentRefused.exit_value(), 70);
+        assert_eq!(ErrorKind::Entropy.exit_value(), 69);
+        assert_eq!(ErrorKind::PlainSecret.exit_value(), 78);
+        assert_eq!(ErrorKind::Audit.exit_value(), 74);
+        assert_eq!(ErrorKind::AuditTampered.exit_value(), 65);
+        assert_eq!(ErrorKind::Disabled.exit_value(), 70);
         assert_eq!(ErrorKind::Metrics.exit_value(), 70);
     }
 

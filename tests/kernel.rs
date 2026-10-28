@@ -694,3 +694,158 @@ limit = 2
     assert_eq!(reloads("accepted"), 1);
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
+
+// ---------------------------------------------------------------------------
+// Audit (boot step 13)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "audit")]
+fn audit_file(root: &Root, name: &str) -> PathBuf {
+    root.path()
+        .join("data")
+        .join("audit")
+        .join(format!("{name}.audit"))
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_audit_records_persist_and_resume_across_boots() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("audit");
+    let system = quiet("kernel-audit", &root).start().unwrap();
+    let first = system
+        .audit()
+        .record("admin:1", "user.delete", "user:9", Outcome::Success)
+        .unwrap();
+    assert_eq!(first.as_u64(), 0);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let path = audit_file(&root, "kernel-audit");
+    assert!(path.is_file());
+
+    // The second boot verifies the chain and appends after it; the first
+    // boot's shutdown recorded the stop.
+    let system = quiet("kernel-audit", &root).start().unwrap();
+    let next = system
+        .audit()
+        .record("admin:1", "user.create", "user:10", Outcome::Success)
+        .unwrap();
+    assert!(next.as_u64() >= 2, "{next:?}");
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_changed_audit_record_stops_the_boot_as_tampered() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("tamper");
+    let system = quiet("kernel-tamper", &root).start().unwrap();
+    let _id = system
+        .audit()
+        .record("admin:1", "role.grant", "user:42", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let path = audit_file(&root, "kernel-tamper");
+    let mut bytes = fs::read(&path).unwrap();
+    let at = bytes.windows(7).position(|w| w == b"user:42").unwrap();
+    bytes[at + 6] = b'3';
+    fs::write(&path, &bytes).unwrap();
+
+    let error = quiet("kernel-tamper", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::AuditTampered);
+    assert_eq!(error.step(), Some(Step::Audit));
+    assert_eq!(fs::read(&path).unwrap(), bytes, "the evidence was changed");
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_cut_audit_tail_fails_until_repair_is_allowed() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("cut");
+    let system = quiet("kernel-cut", &root).start().unwrap();
+    let _id = system
+        .audit()
+        .record("admin:1", "key.rotate", "key:a", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let path = audit_file(&root, "kernel-cut");
+    let bytes = fs::read(&path).unwrap();
+    fs::write(&path, &bytes[..bytes.len() - 5]).unwrap();
+
+    let error = quiet("kernel-cut", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::Audit);
+    assert!(error.action().contains("repair_tail"), "{}", error.action());
+
+    let system = quiet("kernel-cut", &root)
+        .config_str("[audit]\nrepair_tail = true\n")
+        .start()
+        .unwrap();
+    assert!(system.audit().is_enabled());
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let kept: Vec<_> = fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().contains(".cut-"))
+        .collect();
+    assert_eq!(kept.len(), 1, "the cut bytes were not kept");
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_disabled_audit_refuses_records() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("noaudit");
+    let system = quiet("kernel-noaudit", &root)
+        .disable(Member::Audit)
+        .start()
+        .unwrap();
+    assert!(!system.audit().is_enabled());
+    let error = system
+        .audit()
+        .record("a", "b", "c", Outcome::Success)
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::Disabled);
+    assert!(!audit_file(&root, "kernel-noaudit").exists());
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_reloads_and_lockdowns_are_audited() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("auditkernel");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    let system = quiet("kernel-auditk", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    let before = system.audit().next_id().unwrap().as_u64();
+    assert_eq!(system.reload().unwrap(), 2);
+    system
+        .kernel()
+        .urgent()
+        .set(system_suite::kernel::Level::Lockdown, "intrusion suspected")
+        .unwrap();
+    let after = system.audit().next_id().unwrap().as_u64();
+    assert_eq!(after, before + 2);
+    let _id = system
+        .audit()
+        .record("t", "t", "t", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let text = String::from_utf8_lossy(&fs::read(audit_file(&root, "kernel-auditk")).unwrap())
+        .into_owned();
+    for needle in [
+        "config.reload",
+        "urgent.lockdown",
+        "intrusion suspected",
+        "stop",
+    ] {
+        assert!(text.contains(needle), "missing {needle}");
+    }
+}

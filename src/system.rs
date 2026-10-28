@@ -64,6 +64,8 @@ struct Shared {
     log: log_io::Logger,
     #[cfg(feature = "metrics")]
     metrics: crate::metrics_handle::MetricsRef,
+    #[cfg(feature = "audit")]
+    audit: crate::AuditLog,
     #[cfg(feature = "time")]
     clock: Arc<dyn clock_lib::Clock>,
     #[cfg(feature = "ids")]
@@ -158,6 +160,15 @@ impl Foundation {
     #[must_use]
     pub fn clock(&self) -> &dyn clock_lib::Clock {
         &*self.shared.clock
+    }
+
+    /// The application's audit chain (boot step 13). With
+    /// [`Member::Audit`](crate::Member::Audit) disabled its operations fail
+    /// with [`Disabled`](crate::ErrorKind::Disabled).
+    #[cfg(feature = "audit")]
+    #[must_use]
+    pub fn audit(&self) -> &crate::AuditLog {
+        &self.shared.audit
     }
 
     /// The Snowflake generator for entity ids, with the worker id (and
@@ -322,6 +333,13 @@ impl System {
     #[must_use]
     pub fn clock(&self) -> &dyn clock_lib::Clock {
         self.foundation.clock()
+    }
+
+    /// See [`Foundation::audit`].
+    #[cfg(feature = "audit")]
+    #[must_use]
+    pub fn audit(&self) -> &crate::AuditLog {
+        self.foundation.audit()
     }
 
     /// See [`Foundation::ids`].
@@ -530,6 +548,11 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
                 .metrics
                 .clone()
                 .ok_or_else(|| missing("the metrics registry"))?,
+            #[cfg(feature = "audit")]
+            audit: parts
+                .audit
+                .clone()
+                .unwrap_or_else(crate::AuditLog::disabled),
             #[cfg(feature = "time")]
             clock: parts
                 .settings

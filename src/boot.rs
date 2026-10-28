@@ -73,6 +73,8 @@ pub(crate) struct Parts {
     pub(crate) recent: Option<std::sync::Arc<RecentLog>>,
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Option<crate::metrics_handle::MetricsRef>,
+    #[cfg(feature = "audit")]
+    pub(crate) audit: Option<crate::AuditLog>,
     #[cfg(feature = "signals")]
     pub(crate) signals: Option<crate::kernel::signals::SignalIntake>,
     #[cfg(feature = "kernel")]
@@ -110,6 +112,8 @@ impl Parts {
             recent: None,
             #[cfg(feature = "metrics")]
             metrics: None,
+            #[cfg(feature = "audit")]
+            audit: None,
             #[cfg(feature = "signals")]
             signals: None,
             #[cfg(feature = "kernel")]
@@ -181,6 +185,16 @@ impl Parts {
             self.notify("STATUS=stopping");
         }
         self.log.info("stopping", &[("cause", Val::Str(cause))]);
+        #[cfg(feature = "audit")]
+        if let Some(audit) = &self.audit
+            && audit.is_enabled()
+            && let Err(error) = audit.record("kernel", "stop", cause, audit_trail::Outcome::Success)
+        {
+            self.log.error(
+                "the stop could not be audited",
+                &[("error", Val::Str(&error.to_string()))],
+            );
+        }
 
         // 2. Subsystems, in reverse of their start order.
         #[cfg(feature = "kernel")]
@@ -205,6 +219,27 @@ impl Parts {
                     "worker did not stop by the deadline and was abandoned",
                     &[("worker", Val::Str(&late))],
                 );
+                code = crate::exit::DEADLINE;
+            }
+        }
+
+        // 5. Audit: every record is on disk before the members close.
+        #[cfg(feature = "audit")]
+        if let Some(audit) = self.audit.clone()
+            && audit.is_enabled()
+        {
+            let log = self.log.clone();
+            let outcome = run_with_deadline("audit", deadline.max(Instant::now()), move || {
+                if let Err(error) = audit.sync() {
+                    log.error(
+                        "the audit chain could not be synced",
+                        &[("error", Val::Str(&error.to_string()))],
+                    );
+                }
+            });
+            if matches!(outcome, Outcome::Abandoned) {
+                self.log
+                    .error("the audit sync was abandoned at the deadline", &[]);
                 code = crate::exit::DEADLINE;
             }
         }
@@ -525,6 +560,8 @@ pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     steps.push((Step::CrashCapture, step_crash_capture));
     #[cfg(feature = "metrics")]
     steps.push((Step::Metrics, step_metrics));
+    #[cfg(feature = "audit")]
+    steps.push((Step::Audit, step_audit));
     #[cfg(feature = "kernel")]
     steps.push((Step::Kernel, step_kernel));
     steps
@@ -1156,6 +1193,86 @@ fn step_metrics(parts: &mut Parts) -> Result<(), Error> {
         ))
     };
     parts.metrics = Some(core);
+    Ok(())
+}
+
+/// Step 13: the audit chain: opened (or created) owner-only, every record
+/// verified, appending resumed at its tail. A chain that does not verify
+/// stops the boot (`AuditTampered`).
+#[cfg(feature = "audit")]
+fn step_audit(parts: &mut Parts) -> Result<(), Error> {
+    use crate::{audit_log::HashKind, sections::AuditHash};
+
+    let section = parts.sections.audit.clone();
+    if parts.settings.is_disabled(Member::Audit) || !section.enabled {
+        parts.audit = Some(crate::AuditLog::disabled());
+        return Ok(());
+    }
+    let path = match &section.file {
+        Some(file) => file.clone(),
+        None => {
+            let app = parts.app.as_ref().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Audit,
+                    "the audit chain has no directory: the paths member is not set up",
+                    "set [audit] file to an absolute path",
+                )
+            })?;
+            let dir = app
+                .create_private(path_lib::Kind::Data, "audit")
+                .map_err(|e| paths_error(&e).caused_by(e))?;
+            dir.join(format!("{}.audit", parts.settings.name))
+        }
+    };
+    let hash = match section.hash {
+        AuditHash::Sha256 => HashKind::Sha256,
+        #[cfg(feature = "audit-blake3")]
+        AuditHash::Blake3 => HashKind::Blake3,
+        #[cfg(not(feature = "audit-blake3"))]
+        AuditHash::Blake3 => HashKind::Sha256,
+    };
+    let (audit, summary) =
+        crate::AuditLog::open(&path, hash, section.sync_every, section.repair_tail)?;
+    parts.log.info(
+        "audit chain opened",
+        &[
+            ("path", Val::Str(&path.display().to_string())),
+            ("records", Val::U64(summary.records)),
+            (
+                "created",
+                Val::Str(if summary.created { "yes" } else { "no" }),
+            ),
+        ],
+    );
+    if let Some((bytes, kept)) = &summary.cut {
+        parts.log.error(
+            "the audit chain's incomplete last record was cut; its bytes were kept",
+            &[
+                ("bytes", Val::U64(*bytes)),
+                ("kept_in", Val::Str(&kept.display().to_string())),
+            ],
+        );
+    }
+    if !section.sync_every {
+        // `sync = "flush"`: on disk every second and at shutdown.
+        let flushed = audit.clone();
+        let log = parts.log.clone();
+        // The timer runs until the runtime stops at shutdown step 3.
+        let _timer =
+            parts
+                .kernel
+                .runtime()
+                .every("audit-sync", Duration::from_secs(1), move || {
+                    if let Err(error) = flushed.sync() {
+                        log.error(
+                            "the audit chain could not be synced",
+                            &[("error", Val::Str(&error.to_string()))],
+                        );
+                    }
+                })?;
+    }
+    parts.kernel.set_audit(audit.clone());
+    parts.audit = Some(audit);
     Ok(())
 }
 

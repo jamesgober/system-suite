@@ -70,6 +70,19 @@ impl Reloader {
         if let Some(metrics) = self.kernel.metrics() {
             metrics.reload(result.is_ok());
         }
+        #[cfg(feature = "audit")]
+        {
+            let target = match &result {
+                Ok(version) => format!("configuration:v{version}"),
+                Err(_) => format!("configuration:v{}", self.snapshot.version()),
+            };
+            if let Err(error) = self.kernel.audit("config.reload", &target, result.is_ok()) {
+                self.log.error(
+                    "the reload could not be audited",
+                    &[("error", Val::Str(&error.to_string()))],
+                );
+            }
+        }
         result
     }
 

@@ -6,7 +6,7 @@
 //! a setting at its default. Other sections belong to the application.
 
 use super::{Config, FromConfig};
-pub(crate) use crate::sections::{LogFormat, LogLevel, LogRotation, Sections};
+pub(crate) use crate::sections::{AuditHash, LogFormat, LogLevel, LogRotation, Sections};
 use crate::{Error, ErrorKind};
 
 const KNOWN: &[(&str, &[&str])] = &[
@@ -50,6 +50,7 @@ const KNOWN: &[(&str, &[&str])] = &[
         ],
     ),
     ("ids", &["worker", "epoch"]),
+    ("audit", &["enabled", "file", "hash", "sync", "repair_tail"]),
 ];
 
 /// Reads and validates the suite's sections.
@@ -147,6 +148,30 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
 
     s.ids.worker = bounded(config, "ids.worker", s.ids.worker, 0, 1_023)?;
     s.ids.epoch_ms = config.get("ids.epoch")?;
+
+    s.audit.enabled = config.get_or("audit.enabled", s.audit.enabled)?;
+    s.audit.file = config.get("audit.file")?;
+    if let Some(hash) = config.get::<String>("audit.hash")? {
+        s.audit.hash = match hash.as_str() {
+            "sha256" => AuditHash::Sha256,
+            "blake3" if cfg!(feature = "audit-blake3") => AuditHash::Blake3,
+            "blake3" => {
+                return Err(invalid(
+                    "`audit.hash = \"blake3\"` needs the suite's `audit-blake3` feature",
+                    "enable the `audit-blake3` feature, or use \"sha256\"",
+                ));
+            }
+            _ => return Err(choice("audit.hash", "sha256 or blake3")),
+        };
+    }
+    if let Some(sync) = config.get::<String>("audit.sync")? {
+        s.audit.sync_every = match sync.as_str() {
+            "every" => true,
+            "flush" => false,
+            _ => return Err(choice("audit.sync", "every or flush")),
+        };
+    }
+    s.audit.repair_tail = config.get_or("audit.repair_tail", s.audit.repair_tail)?;
     Ok(s)
 }
 

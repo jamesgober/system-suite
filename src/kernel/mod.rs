@@ -79,6 +79,8 @@ struct Control {
     members: OnceLock<Vec<Member>>,
     log: OnceLock<LogSlot>,
     metrics: OnceLock<metrics::KernelMetrics>,
+    #[cfg(feature = "audit")]
+    audit: OnceLock<crate::AuditLog>,
 }
 
 /// A started subsystem, as the kernel holds it.
@@ -127,6 +129,8 @@ impl Kernel {
                 members: OnceLock::new(),
                 log: OnceLock::new(),
                 metrics: OnceLock::new(),
+                #[cfg(feature = "audit")]
+                audit: OnceLock::new(),
             }),
         }
     }
@@ -301,6 +305,8 @@ impl Kernel {
         let _first = self.control.metrics.set(metrics.clone()).is_ok();
         let urgent_log = log.clone();
         let urgent_metrics = metrics.clone();
+        #[cfg(feature = "audit")]
+        let urgent_audit = self.control.audit.get().cloned();
         self.control.urgent.observe(Box::new(move |notice| {
             urgent_log.warn(
                 "urgent line changed",
@@ -311,6 +317,19 @@ impl Kernel {
                 ],
             );
             urgent_metrics.urgent(notice.level);
+            // A lockdown is a privileged action: it goes on the record.
+            #[cfg(feature = "audit")]
+            if notice.level == Level::Lockdown
+                && let Some(audit) = &urgent_audit
+                && audit.is_enabled()
+            {
+                let _recorded = audit.record(
+                    "kernel",
+                    "urgent.lockdown",
+                    notice.reason,
+                    audit_trail::Outcome::Success,
+                );
+            }
         }));
         let weak = Arc::downgrade(&self.control);
         self.control
@@ -382,6 +401,37 @@ impl Kernel {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .pop()
+    }
+
+    /// Connects the kernel to the audit chain (boot step 13), for its own
+    /// privileged actions.
+    #[cfg(feature = "audit")]
+    pub(crate) fn set_audit(&self, audit: crate::AuditLog) {
+        let _first = self.control.audit.set(audit).is_ok();
+    }
+
+    /// Records a privileged action of the kernel, when audit is on. A
+    /// failure is returned to the caller to log.
+    #[cfg(feature = "audit")]
+    pub(crate) fn audit(
+        &self,
+        action: &str,
+        target: &str,
+        success: bool,
+    ) -> Result<(), crate::Error> {
+        match self.control.audit.get() {
+            Some(audit) if audit.is_enabled() => {
+                let outcome = if success {
+                    audit_trail::Outcome::Success
+                } else {
+                    audit_trail::Outcome::Failure
+                };
+                audit
+                    .record("kernel", action, target, outcome)
+                    .map(|_id| ())
+            }
+            _ => Ok(()),
+        }
     }
 
     pub(crate) fn metrics(&self) -> Option<&metrics::KernelMetrics> {

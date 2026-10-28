@@ -82,6 +82,8 @@
     )
 )]
 
+#[cfg(feature = "audit")]
+mod audit_log;
 mod boot;
 mod builder;
 #[cfg(feature = "config")]
@@ -113,6 +115,9 @@ mod staged;
 mod sync;
 mod system;
 
+#[cfg(feature = "audit")]
+#[cfg_attr(docsrs, doc(cfg(feature = "audit")))]
+pub use crate::audit_log::AuditLog;
 #[cfg(feature = "kernel")]
 pub use crate::staged::Boot;
 pub use crate::{
@@ -163,6 +168,12 @@ pub use signal_mod as signal;
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub use metrics_lib as metrics;
+
+/// Tamper-evident audit records: [audit-trail](https://docs.rs/audit-trail).
+/// The system's chain is [`Foundation::audit`].
+#[cfg(feature = "audit")]
+#[cfg_attr(docsrs, doc(cfg(feature = "audit")))]
+pub use audit_trail as audit;
 
 /// Monotonic and wall clocks, mockable: [clock-lib](https://docs.rs/clock-lib).
 #[cfg(feature = "time")]

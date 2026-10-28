@@ -90,7 +90,7 @@ time = ["dep:clock-lib"]
 ids = ["dep:id-forge"]
 
 # Tamper-evident audit records (audit-trail, sha2). Opt-in: dev/PLAN.md, D-035.
-audit = []
+audit = ["paths", "dep:audit-trail", "audit-trail/sha2"]
 
 # Event and callback registry (registry-io). Opt-in until the kernel needs it.
 registry = []
@@ -129,6 +129,9 @@ metrics-tracing = ["metrics", "metrics-lib/tracing"]
 config-toml = ["config", "config-lib/toml"]
 # config-lib's NOML format: `<name>.noml`. Brings `noml`.
 config-noml = ["config", "config-lib/noml"]
+# audit-trail's BLAKE3 hasher (`[audit] hash = "blake3"`). Brings blake3
+# (in the register, section 12.4).
+audit-blake3 = ["audit", "audit-trail/blake3"]
 
 
 # DEPENDENCIES
@@ -155,6 +158,10 @@ config-lib = { version = "1.1", optional = true, default-features = false, featu
 # Structured logging; 2.1 for the recent-lines ring (crash reports) and
 # file modes. First-party; no dependencies with these features.
 log-io = { version = "2.1", optional = true }
+
+# The audit chain; 1.1 for verified open and resume, owner-only files,
+# sync, and a clock that never goes back. Brings sha2 (in the register).
+audit-trail = { version = "1.1", optional = true, default-features = false, features = ["std"] }
 
 # Metrics. First-party; no dependencies with these features. `system`
 # (process metrics) is off: it brings sysinfo on the BSDs, not yet reviewed.
