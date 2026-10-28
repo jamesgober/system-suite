@@ -12,6 +12,69 @@ use crate::{Error, ErrorKind};
 /// The largest configuration (or `.env`) file accepted.
 pub(crate) const MAX_FILE_BYTES: u64 = 1 << 20;
 
+/// The configuration formats compiled in, by file extension. `conf` is
+/// always there; `toml` and `noml` come with `config-toml` and
+/// `config-noml`.
+const FORMATS: &[&str] = &[
+    "conf",
+    #[cfg(feature = "config-toml")]
+    "toml",
+    #[cfg(feature = "config-noml")]
+    "noml",
+];
+
+/// The format of a configuration file, from its extension: `.toml` and
+/// `.noml` when their feature is compiled in, `conf` for anything else.
+pub(crate) fn format_of(path: &Path) -> Result<&'static str, Error> {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some(wanted @ ("toml" | "noml")) => FORMATS
+            .iter()
+            .find(|format| **format == wanted)
+            .copied()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::ConfigInvalid,
+                    format!(
+                        "the configuration file {} is in the {wanted} format, which this build does not read",
+                        path.display()
+                    ),
+                    format!("enable the suite's `config-{wanted}` feature, or use a `.conf` file"),
+                )
+            }),
+        _ => Ok("conf"),
+    }
+}
+
+/// The one `<name>.<format>` file in `dir`, if any. Two of them (say
+/// `site.conf` and `site.toml`) is an error naming both: guessing which
+/// one the operator meant would be wrong half the time.
+fn single_in(dir: &Path, name: &str) -> Result<Option<PathBuf>, Error> {
+    let mut found: Option<PathBuf> = None;
+    for format in FORMATS {
+        let path = dir.join(format!("{name}.{format}"));
+        if !path.is_file() {
+            continue;
+        }
+        if let Some(first) = &found {
+            return Err(Error::new(
+                ErrorKind::ConfigInvalid,
+                format!(
+                    "two configuration files were found: {} and {}",
+                    first.display(),
+                    path.display()
+                ),
+                "keep one of them, or name the one to use with <NAME>_CONFIG",
+            ));
+        }
+        found = Some(path);
+    }
+    Ok(found)
+}
+
 /// Where the configuration comes from.
 #[derive(Clone, Debug)]
 pub(crate) enum Source {
@@ -85,20 +148,17 @@ pub(crate) fn find(search: &Search<'_>) -> Result<(Source, Origin), Error> {
         let path = PathBuf::from(value);
         return Ok((Source::File(must_exist(&path, &variable)?), Origin::EnvFile));
     }
-    let file_name = format!("{}.conf", search.name);
-    if let Some(dir) = search.config_dir {
-        let path = dir.join(&file_name);
-        if path.is_file() {
-            return Ok((Source::File(path), Origin::ConfigDirectory));
-        }
+    if let Some(dir) = search.config_dir
+        && let Some(path) = single_in(dir, search.name)?
+    {
+        return Ok((Source::File(path), Origin::ConfigDirectory));
     }
     // A working directory is easy to influence: a privileged process (or one
     // whose privilege is unknown) must name its file.
-    if search.elevated == Some(false) {
-        let path = PathBuf::from(&file_name);
-        if path.is_file() {
-            return Ok((Source::File(path), Origin::WorkingDirectory));
-        }
+    if search.elevated == Some(false)
+        && let Some(path) = single_in(Path::new("."), search.name)?
+    {
+        return Ok((Source::File(path), Origin::WorkingDirectory));
     }
     Ok((Source::Defaults, Origin::NotFound))
 }
@@ -133,9 +193,14 @@ pub(crate) fn load(source: &Source, version: u64) -> Result<Config, Error> {
     Ok(config)
 }
 
-/// Parses `conf` text.
+/// Parses configuration text: `conf`, or the format of `source`'s
+/// extension.
 pub(crate) fn parse(text: &str, source: Option<&Path>, version: u64) -> Result<Config, Error> {
-    let document = config_lib::Config::from_string(text, Some("conf")).map_err(|e| {
+    let format = match source {
+        Some(path) => format_of(path)?,
+        None => "conf",
+    };
+    let document = config_lib::Config::from_string(text, Some(format)).map_err(|e| {
         // Only the position: the parser's message may quote the text, and
         // the text may hold a secret.
         let at = match &e {
@@ -283,6 +348,70 @@ mod tests {
             Some((Source::File(_), Origin::ConfigDirectory))
         ));
         drop(fs::remove_dir_all(&dir));
+    }
+
+    #[test]
+    fn test_two_candidate_files_are_refused() {
+        let dir = scratch("two");
+        fs::write(dir.join("app.conf"), "[a]\nb = 1\n").ok();
+        let s = search("app", Some(&dir));
+        assert!(matches!(
+            find(&s).ok(),
+            Some((Source::File(_), Origin::ConfigDirectory))
+        ));
+        if FORMATS.len() > 1 {
+            fs::write(dir.join(format!("app.{}", FORMATS[1])), "[a]\nb = 1\n").ok();
+            let error = find(&s).err();
+            assert_eq!(
+                error.as_ref().map(Error::kind),
+                Some(ErrorKind::ConfigInvalid)
+            );
+            assert!(
+                error
+                    .map(|e| e.to_string().contains("app.conf"))
+                    .unwrap_or(false)
+            );
+        }
+        drop(fs::remove_dir_all(&dir));
+    }
+
+    #[test]
+    fn test_format_follows_the_extension() {
+        assert_eq!(format_of(Path::new("site.conf")).ok(), Some("conf"));
+        assert_eq!(format_of(Path::new("site.cfg")).ok(), Some("conf"));
+        assert_eq!(
+            format_of(Path::new("site.toml")).is_ok(),
+            cfg!(feature = "config-toml")
+        );
+        assert_eq!(
+            format_of(Path::new("site.NOML")).is_ok(),
+            cfg!(feature = "config-noml")
+        );
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn test_toml_files_parse_into_the_same_view() {
+        let config = parse(
+            "[http]\nport = 8080\nhosts = [\"a\", \"b\"]\n\n[log]\nlevel = \"debug\"\n",
+            Some(Path::new("site.toml")),
+            1,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(config.get::<u16>("http.port").ok().flatten(), Some(8080));
+        let hosts: Vec<String> = config.require("http.hosts").unwrap_or_default();
+        assert_eq!(hosts, ["a", "b"]);
+        let error = parse("[http\nport = \"hunter2", Some(Path::new("site.toml")), 1).err();
+        let text = error.as_ref().map(ToString::to_string).unwrap_or_default();
+        assert!(!text.contains("hunter2"), "{text}");
+    }
+
+    #[cfg(feature = "config-noml")]
+    #[test]
+    fn test_noml_files_parse_into_the_same_view() {
+        let config = parse("[http]\nport = 8080\n", Some(Path::new("site.noml")), 1)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(config.get::<u16>("http.port").ok().flatten(), Some(8080));
     }
 
     #[test]

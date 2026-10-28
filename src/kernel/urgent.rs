@@ -8,13 +8,14 @@
 
 use std::{
     fmt,
-    sync::{
-        Arc, Mutex, OnceLock, PoisonError,
-        atomic::{AtomicU8, AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, OnceLock, PoisonError},
 };
 
-use crate::{Error, ErrorKind, lifecycle::Mailbox};
+use crate::{
+    Error, ErrorKind,
+    lifecycle::Mailbox,
+    sync::{AtomicU8, AtomicU64, Ordering},
+};
 
 /// How urgent things are, process-wide. Values compare by urgency.
 ///
@@ -120,10 +121,65 @@ struct Line {
 
 /// The level and epoch on their own cache line, so a worker's checkpoint
 /// read never shares a line with anything that is written often.
+///
+/// A change writes the level first and then bumps the epoch (both
+/// acquire-release), so a reader that sees an epoch sees that change's
+/// level or a later one. Once the level reaches `Draining` it only moves
+/// forward. Both properties are model-checked with loom (D-056).
 #[repr(align(64))]
 struct Word {
     level: AtomicU8,
     epoch: AtomicU64,
+}
+
+impl Word {
+    fn new() -> Word {
+        Word {
+            level: AtomicU8::new(Level::Normal as u8),
+            epoch: AtomicU64::new(0),
+        }
+    }
+
+    #[inline]
+    fn level(&self) -> u8 {
+        self.level.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
+    }
+
+    /// Moves the level to `level` unless a stop was requested. Returns
+    /// whether it moved.
+    fn try_set(&self, level: u8) -> bool {
+        let mut current = self.level.load(Ordering::Acquire);
+        loop {
+            if current >= Level::Draining as u8 {
+                return false;
+            }
+            match self.level.compare_exchange_weak(
+                current,
+                level,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Raises the level to `level`, never lowering it. Returns whether it
+    /// rose.
+    fn raise(&self, level: u8) -> bool {
+        self.level.fetch_max(level, Ordering::AcqRel) < level
+    }
+
+    /// Counts a change and returns the new epoch.
+    fn bump(&self) -> u64 {
+        self.epoch.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
+    }
 }
 
 impl UrgentLine {
@@ -134,10 +190,7 @@ impl UrgentLine {
     pub fn detached() -> UrgentLine {
         UrgentLine {
             line: Arc::new(Line {
-                word: Word {
-                    level: AtomicU8::new(Level::Normal as u8),
-                    epoch: AtomicU64::new(0),
-                },
+                word: Word::new(),
                 reason: Mutex::new("start"),
                 mailboxes: Mutex::new(Vec::new()),
                 observer: OnceLock::new(),
@@ -149,7 +202,7 @@ impl UrgentLine {
     #[inline]
     #[must_use]
     pub fn level(&self) -> Level {
-        Level::from_u8(self.line.word.level.load(Ordering::Acquire))
+        Level::from_u8(self.line.word.level())
     }
 
     /// The current epoch: how many changes the line has seen. One atomic
@@ -157,7 +210,7 @@ impl UrgentLine {
     #[inline]
     #[must_use]
     pub fn epoch(&self) -> u64 {
-        self.line.word.epoch.load(Ordering::Acquire)
+        self.line.word.epoch()
     }
 
     /// The current level, epoch, and reason.
@@ -191,25 +244,12 @@ impl UrgentLine {
                 "request a stop instead (Kernel::request_stop)",
             ));
         }
-        let word = &self.line.word;
-        let mut current = word.level.load(Ordering::Acquire);
-        loop {
-            if current >= Level::Draining as u8 {
-                return Err(Error::new(
-                    ErrorKind::UrgentRefused,
-                    "the urgent line cannot change once a stop was requested",
-                    "nothing: the process is going away",
-                ));
-            }
-            match word.level.compare_exchange_weak(
-                current,
-                level as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(actual) => current = actual,
-            }
+        if !self.line.word.try_set(level as u8) {
+            return Err(Error::new(
+                ErrorKind::UrgentRefused,
+                "the urgent line cannot change once a stop was requested",
+                "nothing: the process is going away",
+            ));
         }
         Ok(self.announce(reason))
     }
@@ -217,12 +257,7 @@ impl UrgentLine {
     /// Raises the line to `level` (never lowers it): the kernel's way to
     /// `Draining` and `Stopping`. Returns `false` if it was already there.
     pub(crate) fn raise(&self, level: Level, reason: &'static str) -> bool {
-        let before = self
-            .line
-            .word
-            .level
-            .fetch_max(level as u8, Ordering::AcqRel);
-        if before >= level as u8 {
+        if !self.line.word.raise(level as u8) {
             return false;
         }
         let _epoch = self.announce(reason);
@@ -237,7 +272,7 @@ impl UrgentLine {
             .reason
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = reason;
-        let epoch = self.line.word.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        let epoch = self.line.word.bump();
         let notice = Notice {
             level: self.level(),
             epoch,
@@ -419,5 +454,76 @@ mod tests {
     #[test]
     fn test_word_has_its_own_cache_line() {
         assert_eq!(std::mem::align_of::<Word>(), 64);
+    }
+}
+
+/// Model tests: every interleaving of the urgent line's word (D-056).
+#[cfg(all(loom, test))]
+mod loom_tests {
+    use loom::{sync::Arc, thread};
+
+    use super::{Level, Word};
+
+    #[test]
+    fn loom_a_stop_is_never_undone_by_a_concurrent_set() {
+        loom::model(|| {
+            let word = Arc::new(Word::new());
+            let setter = {
+                let word = Arc::clone(&word);
+                thread::spawn(move || {
+                    if word.try_set(Level::Shed as u8) {
+                        let _epoch = word.bump();
+                    }
+                })
+            };
+            if word.raise(Level::Draining as u8) {
+                let _epoch = word.bump();
+            }
+            assert!(setter.join().is_ok());
+            assert!(word.level() >= Level::Draining as u8);
+        });
+    }
+
+    #[test]
+    fn loom_a_reader_sees_the_level_of_the_epoch_it_read() {
+        loom::model(|| {
+            let word = Arc::new(Word::new());
+            let writer = {
+                let word = Arc::clone(&word);
+                thread::spawn(move || {
+                    assert!(word.try_set(Level::Shed as u8));
+                    let _epoch = word.bump();
+                })
+            };
+            let epoch = word.epoch();
+            let level = word.level();
+            if epoch == 1 {
+                assert_eq!(level, Level::Shed as u8);
+            }
+            assert!(writer.join().is_ok());
+        });
+    }
+
+    #[test]
+    fn loom_concurrent_raises_count_each_rise_once() {
+        loom::model(|| {
+            let word = Arc::new(Word::new());
+            let draining = {
+                let word = Arc::clone(&word);
+                thread::spawn(move || {
+                    if word.raise(Level::Draining as u8) {
+                        let _epoch = word.bump();
+                    }
+                })
+            };
+            let rose = word.raise(Level::Stopping as u8);
+            if rose {
+                let _epoch = word.bump();
+            }
+            assert!(draining.join().is_ok());
+            assert!(rose);
+            assert_eq!(word.level(), Level::Stopping as u8);
+            assert!((1..=2).contains(&word.epoch()));
+        });
     }
 }

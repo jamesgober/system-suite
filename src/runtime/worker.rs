@@ -6,7 +6,7 @@ use std::{
     panic::{self, AssertUnwindSafe},
     sync::{
         Arc, Mutex, OnceLock, PoisonError,
-        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
     },
     thread::{self, JoinHandle, Thread},
     time::{Duration, Instant},
@@ -158,7 +158,7 @@ impl Worker {
             restarts: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             started: Instant::now(),
-            heartbeat_ms: AtomicU64::new(0),
+            heartbeat_ms: Heartbeat::new(),
             heartbeat: self.heartbeat,
             critical: self.critical,
             thread: OnceLock::new(),
@@ -324,6 +324,28 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// A worker's last heartbeat, in milliseconds since it started: written
+/// only by the worker, read by health checks. Relaxed is enough because
+/// one writer stores rising values and readers only compare them with the
+/// clock; a reader never sees it go back (model-checked with loom, D-056).
+struct Heartbeat(crate::sync::AtomicU64);
+
+impl Heartbeat {
+    fn new() -> Heartbeat {
+        Heartbeat(crate::sync::AtomicU64::new(0))
+    }
+
+    #[inline]
+    fn beat(&self, ms: u64) {
+        self.0.store(ms, crate::sync::Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn last(&self) -> u64 {
+        self.0.load(crate::sync::Ordering::Relaxed)
+    }
+}
+
 struct Shared {
     name: Name,
     state: AtomicU8,
@@ -331,7 +353,7 @@ struct Shared {
     stop: AtomicBool,
     started: Instant,
     /// Milliseconds since `started`, written only by the worker.
-    heartbeat_ms: AtomicU64,
+    heartbeat_ms: Heartbeat,
     heartbeat: Option<Duration>,
     critical: bool,
     thread: OnceLock<Thread>,
@@ -381,7 +403,7 @@ impl WorkerContext {
     /// Records that the worker is alive. One relaxed atomic store.
     pub fn heartbeat(&self) {
         let ms = u64::try_from(self.shared.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.shared.heartbeat_ms.store(ms, Ordering::Relaxed);
+        self.shared.heartbeat_ms.beat(ms);
     }
 
     /// Whether the worker should return: it was asked to stop, the runtime
@@ -506,7 +528,7 @@ impl WorkerHandle {
     }
 
     fn silent_for(&self) -> Duration {
-        let last = Duration::from_millis(self.shared.heartbeat_ms.load(Ordering::Relaxed));
+        let last = Duration::from_millis(self.shared.heartbeat_ms.last());
         self.shared.started.elapsed().saturating_sub(last)
     }
 
@@ -762,5 +784,32 @@ mod tests {
         thread::sleep(Duration::from_millis(60));
         assert_eq!(handle.map(|h| h.health().status()), Some(Status::Degraded));
         let _late = rt.stop(Instant::now() + Duration::from_secs(5));
+    }
+}
+
+/// Model tests: every interleaving of a heartbeat and its readers (D-056).
+#[cfg(all(loom, test))]
+mod loom_tests {
+    use loom::{sync::Arc, thread};
+
+    use super::Heartbeat;
+
+    #[test]
+    fn loom_a_reader_never_sees_a_heartbeat_go_back() {
+        loom::model(|| {
+            let beat = Arc::new(Heartbeat::new());
+            let worker = {
+                let beat = Arc::clone(&beat);
+                thread::spawn(move || {
+                    beat.beat(5);
+                    beat.beat(9);
+                })
+            };
+            let first = beat.last();
+            let second = beat.last();
+            assert!(second >= first);
+            assert!(worker.join().is_ok());
+            assert_eq!(beat.last(), 9);
+        });
     }
 }

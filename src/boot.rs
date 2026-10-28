@@ -1010,14 +1010,31 @@ fn step_logging(parts: &mut Parts) -> Result<(), Error> {
     };
     let _first = parts.log.set(logger.clone());
     let mut global_taken = false;
+    #[cfg(feature = "log-bridge")]
+    let mut bridge_taken = false;
     if parts.settings.process_wide && !parts.settings.is_disabled(Member::Log) {
         global_taken = log_io::set_global(logger.clone()).is_err();
+        // Records from crates that use the `log` facade go to this logger
+        // (D-057).
+        #[cfg(feature = "log-bridge")]
+        {
+            bridge_taken = log_io::compat::LogBridge::new(logger.clone())
+                .install()
+                .is_err();
+        }
     }
     parts.logger = Some(logger);
     first_lines(parts);
     if global_taken {
         parts.log.warn(
             "a process-wide logger was already installed; this system's logger is reachable only through its handle",
+            &[],
+        );
+    }
+    #[cfg(feature = "log-bridge")]
+    if bridge_taken {
+        parts.log.warn(
+            "a `log` logger was already installed; records from the `log` facade go there, not to this system's logger",
             &[],
         );
     }

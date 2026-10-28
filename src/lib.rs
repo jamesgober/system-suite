@@ -109,6 +109,8 @@ mod shutdown;
 mod snapshot;
 #[cfg(feature = "kernel")]
 mod staged;
+#[cfg(feature = "kernel")]
+mod sync;
 mod system;
 
 #[cfg(feature = "kernel")]

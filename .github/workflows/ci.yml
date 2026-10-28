@@ -62,6 +62,20 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+  loom:
+    name: Loom (urgent line, heartbeats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Only the kernel feature: members that read cfg(loom) themselves
+      # (clock-lib) do not build as dependencies under it (D-056).
+      - name: Model tests
+        run: cargo test --lib --release --no-default-features --features kernel loom_
+        env:
+          RUSTFLAGS: "--cfg loom"
+
   package:
     name: Package
     runs-on: ubuntu-latest

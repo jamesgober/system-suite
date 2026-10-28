@@ -51,6 +51,8 @@ fn child() {
         "env-file-missing" => env_file_missing(&root),
         "panic" => panic_after_boot(&root),
         "reload-watch" => reload_watch(&root),
+        #[cfg(feature = "log-bridge")]
+        "log-bridge" => log_bridge(&root),
         other => panic!("unknown scenario {other}"),
     };
     std::process::exit(i32::from(code));
@@ -141,6 +143,19 @@ fn reload_watch(_root: &Path) -> u8 {
         0
     } else {
         1
+    }
+}
+
+/// Boots, logs through the `log` facade, and shuts down.
+#[cfg(feature = "log-bridge")]
+fn log_bridge(_root: &Path) -> u8 {
+    match System::builder(&name()).start() {
+        Ok(system) => {
+            log::warn!(target: "facade", "a record from the log facade");
+            let _code = system.shutdown();
+            0
+        }
+        Err(error) => report(&error),
     }
 }
 
@@ -455,6 +470,16 @@ fn test_sighup_reloads_and_a_broken_file_changes_nothing() {
         log.contains("\"state\""),
         "the dump signal wrote nothing:\n{log}"
     );
+}
+
+#[cfg(feature = "log-bridge")]
+#[test]
+fn test_log_facade_records_reach_the_systems_log() {
+    let scenario = Scenario::new("it-logbridge");
+    let output = scenario.run("log-bridge");
+    assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
+    let log = log_text(&scenario.dir("logs"), "it-logbridge");
+    assert!(log.contains("a record from the log facade"), "{log}");
 }
 
 #[cfg(windows)]

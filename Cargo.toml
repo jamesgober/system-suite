@@ -115,6 +115,20 @@ metrics-meter = ["metrics", "metrics-lib/meter"]
 metrics-statsd = ["metrics", "metrics-lib/statsd"]
 # metrics-lib's blocking `/metrics` server and Pushgateway client (std only).
 metrics-http = ["metrics", "metrics-lib/http"]
+# Accepted into the dependency register by James on 2026-10-28 (dev/PLAN.md,
+# D-056); each is opt-in.
+# log-io's `log` bridge: records from crates that use the `log` facade go to
+# the suite's logger. Brings `log`.
+log-bridge = ["log", "log-io/log"]
+# log-io's `tracing` layer: a `tracing` subscriber that writes through
+# log-io. Brings `tracing-core` and `tracing-subscriber`.
+log-tracing = ["log", "log-io/tracing"]
+# metrics-lib's `tracing` integration. Brings `tracing`.
+metrics-tracing = ["metrics", "metrics-lib/tracing"]
+# config-lib's TOML format (through noml): `<name>.toml`. Brings `noml`.
+config-toml = ["config", "config-lib/toml"]
+# config-lib's NOML format: `<name>.noml`. Brings `noml`.
+config-noml = ["config", "config-lib/noml"]
 
 
 # DEPENDENCIES
@@ -161,6 +175,17 @@ id-forge = { version = "1.0", optional = true }
 # DEV DEPENDENCIES
 # #################################
 [dev-dependencies]
+# The `log` facade, to test `log-bridge` (accepted, D-056).
+log = { version = "0.4", default-features = false, features = ["std"] }
+
+# Model tests of the urgent line and worker heartbeats, compiled only with
+# `RUSTFLAGS="--cfg loom"` (D-056). Development only; never in a build of
+# the crate.
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
 
 # RELEASE PROFILE

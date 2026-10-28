@@ -401,6 +401,66 @@ fn test_a_configuration_file_others_can_change_is_refused() {
     assert!(!error.to_string().contains("limit"), "{error}");
 }
 
+#[cfg(feature = "config-toml")]
+#[test]
+fn test_a_toml_file_is_read_and_reloaded() {
+    let root = Root::new("toml");
+    let file = root.path().join("app.toml");
+    write_private(
+        &file,
+        "[app]
+limit = 5
+
+[log]
+level = \"debug\"
+",
+    );
+    let system = quiet("kernel-toml", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    assert_eq!(system.config().get_or("app.limit", 0_u32).unwrap(), 5);
+    write_private(
+        &file,
+        "[app]
+limit = 6
+",
+    );
+    assert_eq!(system.reload().unwrap(), 2);
+    assert_eq!(system.config().get_or("app.limit", 0_u32).unwrap(), 6);
+    write_private(
+        &file,
+        "[app
+limit = 7
+",
+    );
+    assert_eq!(
+        system.reload().err().map(|e| e.kind()),
+        Some(ErrorKind::ConfigInvalid)
+    );
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(not(feature = "config-toml"))]
+#[test]
+fn test_a_toml_file_needs_its_feature() {
+    let root = Root::new("notoml");
+    let file = root.path().join("app.toml");
+    write_private(
+        &file,
+        "[app]
+limit = 5
+",
+    );
+    let error = quiet("kernel-notoml", &root)
+        .config_file(&file)
+        .start()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::ConfigInvalid);
+    assert!(error.to_string().contains("toml"), "{error}");
+}
+
 #[test]
 fn test_ids_take_the_worker_from_the_configuration() {
     let root = Root::new("ids");
