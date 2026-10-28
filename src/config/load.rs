@@ -189,6 +189,9 @@ pub(crate) fn load(source: &Source, version: u64) -> Result<Config, Error> {
         )?,
         Source::Defaults => parse("", None, version)?,
     };
+    // With the secrets feature, references are resolved at boot step 8;
+    // without it, every one is refused so it is never taken as a literal.
+    #[cfg(not(feature = "secrets"))]
     refuse_references(&config)?;
     Ok(config)
 }
@@ -259,6 +262,7 @@ pub(crate) fn io_error(path: &Path, what: &str, error: &std::io::Error) -> Error
 /// Secret references (`env:`, `file:`, `vault:`) are resolved through
 /// key-vault from 0.5 (D-025, D-031). Until then a reference is refused, so
 /// it is never mistaken for a literal.
+#[cfg_attr(feature = "secrets", allow(dead_code))]
 pub(crate) fn refuse_references(config: &Config) -> Result<(), Error> {
     let root = config.backend().as_value();
     match find_reference(root, &mut Vec::new()) {
@@ -273,6 +277,7 @@ pub(crate) fn refuse_references(config: &Config) -> Result<(), Error> {
     }
 }
 
+#[cfg_attr(feature = "secrets", allow(dead_code))]
 fn find_reference(value: &config_lib::Value, path: &mut Vec<String>) -> Option<String> {
     match value {
         config_lib::Value::String(text)

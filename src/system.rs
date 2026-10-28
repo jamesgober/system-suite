@@ -68,6 +68,8 @@ struct Shared {
     audit: crate::AuditLog,
     #[cfg(feature = "registry")]
     events: Arc<registry_io::SyncRegistry<crate::kernel::Event>>,
+    #[cfg(feature = "secrets")]
+    vault: key_vault::KeyVault,
     #[cfg(feature = "time")]
     clock: Arc<dyn clock_lib::Clock>,
     #[cfg(feature = "ids")]
@@ -171,6 +173,15 @@ impl Foundation {
     #[must_use]
     pub fn audit(&self) -> &crate::AuditLog {
         &self.shared.audit
+    }
+
+    /// The vault (boot step 8): the configuration's resolved secrets and
+    /// the keys registered in `on_vault`. Read secrets through
+    /// [`Config::secret`](crate::config::Config::secret).
+    #[cfg(feature = "secrets")]
+    #[must_use]
+    pub fn vault(&self) -> &key_vault::KeyVault {
+        &self.shared.vault
     }
 
     /// The kernel's event registry (boot step 14): register callbacks for
@@ -357,6 +368,13 @@ impl System {
     #[must_use]
     pub fn audit(&self) -> &crate::AuditLog {
         self.foundation.audit()
+    }
+
+    /// See [`Foundation::vault`].
+    #[cfg(feature = "secrets")]
+    #[must_use]
+    pub fn vault(&self) -> &key_vault::KeyVault {
+        self.foundation.vault()
     }
 
     /// See [`Foundation::events`].
@@ -582,6 +600,12 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
                 .events
                 .clone()
                 .unwrap_or_else(|| Arc::new(registry_io::SyncRegistry::new())),
+            #[cfg(feature = "secrets")]
+            vault: parts
+                .secrets
+                .as_ref()
+                .map(|state| state.vault().clone())
+                .ok_or_else(|| missing("the vault"))?,
             #[cfg(feature = "time")]
             clock: parts
                 .settings

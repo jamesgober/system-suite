@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(any(
     feature = "kernel",
+    feature = "rand",
     feature = "env",
     feature = "log",
     feature = "sys",
@@ -77,6 +78,8 @@ pub(crate) struct Parts {
     pub(crate) audit: Option<crate::AuditLog>,
     #[cfg(feature = "registry")]
     pub(crate) events: Option<Arc<registry_io::SyncRegistry<crate::kernel::Event>>>,
+    #[cfg(feature = "secrets")]
+    pub(crate) secrets: Option<Arc<crate::secrets::State>>,
     #[cfg(feature = "signals")]
     pub(crate) signals: Option<crate::kernel::signals::SignalIntake>,
     #[cfg(feature = "kernel")]
@@ -120,6 +123,8 @@ impl Parts {
             audit: None,
             #[cfg(feature = "registry")]
             events: None,
+            #[cfg(feature = "secrets")]
+            secrets: None,
             #[cfg(feature = "signals")]
             signals: None,
             #[cfg(feature = "kernel")]
@@ -270,6 +275,13 @@ impl Parts {
                     .error("the audit sync was abandoned at the deadline", &[]);
                 code = crate::exit::DEADLINE;
             }
+        }
+
+        // 7. Secrets: the configuration's secrets are removed from the
+        //    vault, which wipes them.
+        #[cfg(feature = "secrets")]
+        if let Some(secrets) = self.secrets.take() {
+            secrets.wipe();
         }
 
         // 8. Signals: a further signal gets the operating system's default.
@@ -595,6 +607,8 @@ pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     steps.push((Step::Guard, step_guard));
     #[cfg(feature = "signals")]
     steps.push((Step::Signals, step_signals));
+    #[cfg(feature = "secrets")]
+    steps.push((Step::Secrets, step_secrets));
     #[cfg(feature = "paths")]
     steps.push((Step::Directories, step_directories));
     #[cfg(feature = "log")]
@@ -996,6 +1010,64 @@ fn logs_to_file(parts: &Parts) -> bool {
     cfg!(feature = "log") && !parts.settings.is_disabled(Member::Log) && parts.sections.log.file
 }
 
+/// Step 8: the vault is built, the `on_vault` callbacks run, and every
+/// secret reference in the configuration is resolved into it.
+#[cfg(feature = "secrets")]
+fn step_secrets(parts: &mut Parts) -> Result<(), Error> {
+    // The original bytes come back from the vault: no normalization.
+    let vault = key_vault::KeyVaultBuilder::new()
+        .normalize_with_blake3(false)
+        .build();
+    let callbacks = std::mem::take(
+        parts
+            .settings
+            .on_vault
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    for callback in callbacks {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&vault)));
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(failure)) => {
+                return Err(Error::new(
+                    ErrorKind::Secret,
+                    format!("an on_vault callback failed: {failure}"),
+                    "fix the cause in the message",
+                )
+                .member_of(Member::Secrets)
+                .caused_by(failure.into_error()));
+            }
+            Err(_) => {
+                return Err(Error::new(
+                    ErrorKind::Secret,
+                    "an on_vault callback panicked",
+                    "fix the callback",
+                )
+                .member_of(Member::Secrets));
+            }
+        }
+    }
+    let state = Arc::new(crate::secrets::State::new(
+        vault,
+        #[cfg(feature = "env")]
+        parts.env.clone(),
+    ));
+    if !parts.settings.is_disabled(Member::Secrets)
+        && let Some(snapshot) = &parts.config
+    {
+        let config = snapshot.load();
+        let table = state.stage(
+            &config,
+            parts.sections.secrets.allow_plain,
+            config.version(),
+        )?;
+        state.accept(table);
+    }
+    parts.secrets = Some(state);
+    Ok(())
+}
+
 /// Step 9: the directories the enabled members write to, created
 /// owner-only. Only the log directory in this version.
 #[cfg(feature = "paths")]
@@ -1385,6 +1457,11 @@ fn step_kernel(parts: &mut Parts) -> Result<(), Error> {
             parts.sections.clone(),
             parts.kernel.clone(),
             parts.log.clone(),
+            #[cfg(feature = "secrets")]
+            parts
+                .secrets
+                .clone()
+                .filter(|_| !parts.settings.is_disabled(Member::Secrets)),
         )));
     }
     Ok(())

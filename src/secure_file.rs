@@ -79,6 +79,70 @@ fn check_metadata(metadata: &fs::Metadata, path: &Path, what: &str) -> Result<()
     Ok(())
 }
 
+/// A secret file (`file:` reference): owner-only (no group or other bits
+/// at all, `0o600` or stricter) and owned by the service's user or root,
+/// checked on the opened file. Windows files are governed by their
+/// directory's access control list, which this check does not read.
+#[cfg(all(unix, feature = "secrets"))]
+pub(crate) fn check_secret_open(file: &fs::File, path: &Path, key: &str) -> Result<(), Error> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file.metadata().map_err(|e| {
+        Error::new(
+            ErrorKind::Secret,
+            format!(
+                "the secret file for `{key}` cannot be inspected ({})",
+                e.kind()
+            ),
+            "check that the service's user can read it",
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(Error::new(
+            ErrorKind::Secret,
+            format!(
+                "the secret file {} for `{key}` is not a regular file",
+                path.display()
+            ),
+            "point the reference at a regular file",
+        ));
+    }
+    if metadata.mode() & 0o077 != 0 {
+        return Err(Error::new(
+            ErrorKind::Secret,
+            format!(
+                "the secret file {} for `{key}` can be read or changed by other users (mode {:o})",
+                path.display(),
+                metadata.mode() & 0o777
+            ),
+            "chmod 600 (or 400) the file",
+        ));
+    }
+    if let Some(user) = current_uid() {
+        let owner = metadata.uid();
+        if owner != user && owner != 0 {
+            return Err(Error::new(
+                ErrorKind::Secret,
+                format!(
+                    "the secret file {} for `{key}` belongs to another user (uid {owner})",
+                    path.display()
+                ),
+                "chown the file to the service's user (or root)",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(not(unix), feature = "secrets"))]
+pub(crate) fn check_secret_open(
+    _file: &std::fs::File,
+    _path: &Path,
+    _key: &str,
+) -> Result<(), Error> {
+    Ok(())
+}
+
 #[cfg(not(unix))]
 #[cfg_attr(not(feature = "env"), allow(dead_code))]
 pub(crate) fn check(_path: &Path, _what: &str) -> Result<(), Error> {

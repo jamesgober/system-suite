@@ -464,6 +464,7 @@ impl Kernel {
     /// Records a privileged action of the kernel, when audit is on. A
     /// failure is returned to the caller to log.
     #[cfg(feature = "audit")]
+    #[cfg_attr(not(feature = "config"), allow(dead_code))]
     pub(crate) fn audit(
         &self,
         action: &str,

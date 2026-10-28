@@ -374,7 +374,14 @@ fn test_configuration_failures_stop_the_boot_at_step_5() {
             .err()
             .unwrap();
         assert_eq!(error.kind(), kind, "{text}");
-        assert_eq!(error.step(), Some(Step::Configuration), "{text}");
+        // With the secrets feature a reference is resolved (and here fails)
+        // at step 8; without it, it is refused at step 5.
+        let step = if kind == ErrorKind::Secret && cfg!(feature = "secrets") {
+            Step::Secrets
+        } else {
+            Step::Configuration
+        };
+        assert_eq!(error.step(), Some(step), "{text}");
     }
     let error = quiet("kernel-step5", &root)
         .config_file(root.path().join("missing.conf"))
@@ -912,4 +919,149 @@ fn test_events_reach_handlers_and_a_panicking_handler_is_isolated() {
             "missing {want} in {seen:?}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Secrets (boot step 8, threat T2)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "secrets")]
+fn secret_text(system: &System, key: &str) -> String {
+    let secret = system.config().secret(key).unwrap();
+    secret
+        .with(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap()
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_references_resolve_from_env_file_and_vault() {
+    let root = Root::new("secrets");
+    fs::create_dir_all(root.path().join("config")).unwrap();
+    write_private(
+        &root.path().join("config").join(".env"),
+        "KERNEL_SECRET_DB=from-the-env-file\n",
+    );
+    let secret_file = root.path().join("api.secret");
+    write_private(&secret_file, "from-a-file\n");
+    let config = format!(
+        "[db]\npassword = \"env:KERNEL_SECRET_DB\"\n[api]\ntoken = \"file:{}\"\n[hsm]\nkey = \"vault:hsm-key\"\n",
+        secret_file.display().to_string().replace('\\', "/")
+    );
+    let system = quiet("kernel-secrets", &root)
+        .config_str(&config)
+        .on_vault(|vault| {
+            let _handle = vault.register(
+                "hsm-key",
+                system_suite::vault::RawKey::new(b"from-the-hsm".to_vec()),
+            )?;
+            Ok(())
+        })
+        .start()
+        .unwrap();
+    assert_eq!(secret_text(&system, "db.password"), "from-the-env-file");
+    assert_eq!(secret_text(&system, "api.token"), "from-a-file");
+    assert_eq!(secret_text(&system, "hsm.key"), "from-the-hsm");
+    let secret = system.config().secret("db.password").unwrap();
+    let shown = format!("{secret:?}");
+    assert!(!shown.contains("from-the"), "{shown}");
+    assert_eq!(
+        system.config().secret("db.host").err().map(|e| e.kind()),
+        Some(ErrorKind::Secret)
+    );
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    // Shutdown step 7 removed the configuration's secrets from the vault.
+    assert!(secret.with(|bytes| bytes.len()).is_err());
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_unresolvable_references_name_the_key_never_a_value() {
+    let root = Root::new("badrefs");
+    let cases = [
+        "[db]\npassword = \"env:KERNEL_NEVER_SET_ANYWHERE\"\n",
+        "[db]\npassword = \"file:/definitely/not/here\"\n",
+        "[db]\npassword = \"file:relative/path\"\n",
+        "[db]\npassword = \"vault:unregistered\"\n",
+    ];
+    for text in cases {
+        let error = quiet("kernel-badrefs", &root)
+            .config_str(text)
+            .start()
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), ErrorKind::Secret, "{text}");
+        assert_eq!(error.step(), Some(Step::Secrets), "{text}");
+        assert!(error.to_string().contains("db.password"), "{error}");
+    }
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_plain_secrets_are_refused_unless_allowed() {
+    let root = Root::new("plain");
+    for key in ["password", "api_token", "client_secret"] {
+        let text = format!("[db]\n{key} = \"hunter2\"\n");
+        let error = quiet("kernel-plain", &root)
+            .config_str(&text)
+            .start()
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), ErrorKind::PlainSecret, "{key}");
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+    }
+    let system = quiet("kernel-plain", &root)
+        .config_str("[db]\npassword = \"hunter2\"\n[secrets]\nallow_plain = true\n")
+        .start()
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(all(feature = "secrets", unix))]
+#[test]
+fn test_t2_a_secret_file_others_can_read_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = Root::new("loosefile");
+    let secret_file = root.path().join("db.secret");
+    write_private(&secret_file, "hunter2");
+    fs::set_permissions(&secret_file, fs::Permissions::from_mode(0o640)).unwrap();
+    let error = quiet("kernel-loose", &root)
+        .config_str(&format!(
+            "[db]\npassword = \"file:{}\"\n",
+            secret_file.display()
+        ))
+        .start()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::Secret);
+    assert!(error.action().contains("chmod 600"), "{}", error.action());
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_a_reload_resolves_again_and_an_older_secret_keeps_its_value() {
+    let root = Root::new("reloadsecret");
+    let secret_file = root.path().join("db.secret");
+    write_private(&secret_file, "first");
+    let reference = secret_file.display().to_string().replace('\\', "/");
+    let file = root.write_config(&format!("[db]\npassword = \"file:{reference}\"\n"));
+    let system = quiet("kernel-reloadsecret", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    let before = system.config().secret("db.password").unwrap();
+    write_private(&secret_file, "second");
+    assert_eq!(system.reload().unwrap(), 2);
+    assert_eq!(secret_text(&system, "db.password"), "second");
+    assert_eq!(before.with(<[u8]>::to_vec).unwrap(), b"first");
+
+    // A reload that fails to resolve changes nothing.
+    fs::remove_file(&secret_file).unwrap();
+    assert_eq!(
+        system.reload().err().map(|e| e.kind()),
+        Some(ErrorKind::Secret)
+    );
+    assert_eq!(secret_text(&system, "db.password"), "second");
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }

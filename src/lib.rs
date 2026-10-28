@@ -103,6 +103,8 @@ mod member;
 mod metrics_handle;
 #[cfg(feature = "kernel")]
 pub mod runtime;
+#[cfg(feature = "secrets")]
+mod secrets;
 // Without `config` only the defaults exist, so some values are never built.
 #[cfg_attr(not(feature = "config"), allow(dead_code))]
 mod sections;
@@ -197,6 +199,12 @@ pub use global_lib as global;
 #[cfg(feature = "rand")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
 pub use mod_rand as rand;
+
+/// Page-locked secret storage: [key-vault](https://docs.rs/key-vault). The
+/// system's vault is [`Foundation::vault`].
+#[cfg(feature = "secrets")]
+#[cfg_attr(docsrs, doc(cfg(feature = "secrets")))]
+pub use key_vault as vault;
 
 /// Monotonic and wall clocks, mockable: [clock-lib](https://docs.rs/clock-lib).
 #[cfg(feature = "time")]

@@ -31,6 +31,10 @@ pub(crate) mod load;
 pub(crate) mod reload;
 pub(crate) mod sections;
 
+#[cfg(feature = "secrets")]
+#[cfg_attr(docsrs, doc(cfg(feature = "secrets")))]
+pub use crate::secrets::Secret;
+
 /// config-lib, the configuration backend (D-034).
 pub use config_lib as backend;
 
@@ -67,6 +71,8 @@ struct Inner {
     document: config_lib::Config,
     source: Option<std::path::PathBuf>,
     version: u64,
+    #[cfg(feature = "secrets")]
+    secrets: std::sync::OnceLock<Arc<crate::secrets::Table>>,
 }
 
 impl Config {
@@ -88,8 +94,36 @@ impl Config {
                 document,
                 source: source.map(Path::to_path_buf),
                 version,
+                #[cfg(feature = "secrets")]
+                secrets: std::sync::OnceLock::new(),
             }),
         }
+    }
+
+    /// The secret the reference at `path` (`env:NAME`, `file:/path`,
+    /// `vault:name`) was resolved to at boot step 8 (or the reload that
+    /// produced this configuration). The bytes are only visible inside
+    /// [`Secret::with`](crate::config::Secret::with).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Secret`] when `path` holds no reference, or when this
+    /// configuration was not resolved (one made with `from_text`).
+    #[cfg(feature = "secrets")]
+    pub fn secret(&self, path: &str) -> Result<crate::config::Secret, Error> {
+        match self.inner.secrets.get() {
+            Some(table) => table.secret(path),
+            None => Err(Error::new(
+                ErrorKind::Secret,
+                format!("the configuration holding `{path}` has no resolved secrets"),
+                "read secrets from the running system's configuration (Foundation::config)",
+            )),
+        }
+    }
+
+    #[cfg(feature = "secrets")]
+    pub(crate) fn set_secrets(&self, table: Arc<crate::secrets::Table>) {
+        let _first = self.inner.secrets.set(table).is_ok();
     }
 
     /// The value at `path`, converted to `T`; `Ok(None)` when absent.

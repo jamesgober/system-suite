@@ -14,6 +14,12 @@ pub(crate) struct Sections {
     pub(crate) kernel: Kernel,
     pub(crate) ids: Ids,
     pub(crate) audit: Audit,
+    pub(crate) secrets: Secrets,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct Secrets {
+    pub(crate) allow_plain: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -153,6 +159,7 @@ impl Default for Sections {
                 sync_every: true,
                 repair_tail: false,
             },
+            secrets: Secrets::default(),
         }
     }
 }

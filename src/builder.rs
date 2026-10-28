@@ -20,6 +20,11 @@ pub(crate) const DEFAULT_MEMBER_RESERVE: Duration = Duration::from_secs(2);
 /// The longest shutdown deadline accepted.
 pub(crate) const MAX_SHUTDOWN_DEADLINE: Duration = Duration::from_secs(3600);
 
+/// A callback run at boot step 8, after the vault is built.
+#[cfg(feature = "secrets")]
+pub(crate) type OnVault =
+    Box<dyn FnOnce(&key_vault::KeyVault) -> Result<(), crate::lifecycle::Failure> + Send + 'static>;
+
 /// A callback run at boot step 17, before readiness is announced.
 #[cfg(feature = "kernel")]
 pub(crate) type OnReady =
@@ -86,6 +91,8 @@ pub(crate) struct Settings {
     pub(crate) subsystems: std::sync::Mutex<Vec<Box<dyn crate::lifecycle::Subsystem>>>,
     #[cfg(feature = "kernel")]
     pub(crate) on_ready: std::sync::Mutex<Vec<OnReady>>,
+    #[cfg(feature = "secrets")]
+    pub(crate) on_vault: std::sync::Mutex<Vec<OnVault>>,
     pub(crate) disabled: Vec<Member>,
     pub(crate) process_wide: bool,
     pub(crate) shutdown_deadline: Option<Duration>,
@@ -140,6 +147,8 @@ impl Builder {
                 subsystems: std::sync::Mutex::new(Vec::new()),
                 #[cfg(feature = "kernel")]
                 on_ready: std::sync::Mutex::new(Vec::new()),
+                #[cfg(feature = "secrets")]
+                on_vault: std::sync::Mutex::new(Vec::new()),
                 disabled: Vec::new(),
                 process_wide: true,
                 shutdown_deadline: None,
@@ -292,6 +301,23 @@ impl Builder {
     {
         self.settings
             .on_ready
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(Box::new(callback));
+        self
+    }
+
+    /// Runs `callback` at boot step 8, after the vault is built and before
+    /// `vault:` references are resolved: the place to register keys the
+    /// application obtains itself (from a hardware module, a key-management
+    /// service, an operator prompt). A failing callback unwinds the boot.
+    #[cfg(feature = "secrets")]
+    pub fn on_vault<F>(mut self, callback: F) -> Self
+    where
+        F: FnOnce(&key_vault::KeyVault) -> Result<(), crate::lifecycle::Failure> + Send + 'static,
+    {
+        self.settings
+            .on_vault
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(Box::new(callback));

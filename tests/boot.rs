@@ -836,13 +836,13 @@ fn test_t4_configuration_step_fails_on_an_invalid_file() {
     for content in [
         "[log\nlevel = \"info\"\n",
         "[log]\nlevel = \"loud\"\n",
-        "[db]\npassword = \"file:/run/secrets/db\"\n",
+        "[db]\nhost = \"hunter2-host\"\n[secrets]\nallow_plain = \"maybe\"\n",
     ] {
         write_private(&file, content);
         let output = scenario.run("boot");
         assert_boot_fails(&output, "step 5 (configuration)", exit::CONFIG);
         assert!(
-            !text(&output.stderr).contains("/run/secrets/db"),
+            !text(&output.stderr).contains("hunter2"),
             "{}",
             text(&output.stderr)
         );
@@ -851,6 +851,24 @@ fn test_t4_configuration_step_fails_on_an_invalid_file() {
         !scenario.dir("runtime").exists(),
         "the guard ran after a failed step"
     );
+}
+
+/// Without the secrets feature a reference is refused at step 5; with it,
+/// a reference that cannot be resolved stops the boot at step 8.
+#[test]
+fn test_t4_an_unresolvable_secret_reference_stops_the_boot() {
+    let scenario = Scenario::new("it-secretref");
+    write_private(
+        &scenario.dir("config").join("it-secretref.conf"),
+        "[db]\npassword = \"env:SYSTEM_SUITE_IT_NEVER_SET\"\n",
+    );
+    let output = scenario.run("boot");
+    let step = if cfg!(feature = "secrets") {
+        "step 8 (secrets)"
+    } else {
+        "step 5 (configuration)"
+    };
+    assert_boot_fails(&output, step, exit::CONFIG);
 }
 
 #[cfg(unix)]

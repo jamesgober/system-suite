@@ -51,6 +51,7 @@ const KNOWN: &[(&str, &[&str])] = &[
     ),
     ("ids", &["worker", "epoch"]),
     ("audit", &["enabled", "file", "hash", "sync", "repair_tail"]),
+    ("secrets", &["allow_plain"]),
 ];
 
 /// Reads and validates the suite's sections.
@@ -172,6 +173,7 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
         };
     }
     s.audit.repair_tail = config.get_or("audit.repair_tail", s.audit.repair_tail)?;
+    s.secrets.allow_plain = config.get_or("secrets.allow_plain", s.secrets.allow_plain)?;
     Ok(s)
 }
 
