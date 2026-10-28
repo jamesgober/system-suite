@@ -66,6 +66,8 @@ struct Shared {
     metrics: crate::metrics_handle::MetricsRef,
     #[cfg(feature = "audit")]
     audit: crate::AuditLog,
+    #[cfg(feature = "registry")]
+    events: Arc<registry_io::SyncRegistry<crate::kernel::Event>>,
     #[cfg(feature = "time")]
     clock: Arc<dyn clock_lib::Clock>,
     #[cfg(feature = "ids")]
@@ -169,6 +171,16 @@ impl Foundation {
     #[must_use]
     pub fn audit(&self) -> &crate::AuditLog {
         &self.shared.audit
+    }
+
+    /// The kernel's event registry (boot step 14): register callbacks for
+    /// [`kernel::Event`](crate::kernel::Event)s. With
+    /// [`Member::Registry`](crate::Member::Registry) disabled the kernel
+    /// never notifies it.
+    #[cfg(feature = "registry")]
+    #[must_use]
+    pub fn events(&self) -> &Arc<registry_io::SyncRegistry<crate::kernel::Event>> {
+        &self.shared.events
     }
 
     /// The Snowflake generator for entity ids, with the worker id (and
@@ -340,6 +352,13 @@ impl System {
     #[must_use]
     pub fn audit(&self) -> &crate::AuditLog {
         self.foundation.audit()
+    }
+
+    /// See [`Foundation::events`].
+    #[cfg(feature = "registry")]
+    #[must_use]
+    pub fn events(&self) -> &Arc<registry_io::SyncRegistry<crate::kernel::Event>> {
+        self.foundation.events()
     }
 
     /// See [`Foundation::ids`].
@@ -553,6 +572,11 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
                 .audit
                 .clone()
                 .unwrap_or_else(crate::AuditLog::disabled),
+            #[cfg(feature = "registry")]
+            events: parts
+                .events
+                .clone()
+                .unwrap_or_else(|| Arc::new(registry_io::SyncRegistry::new())),
             #[cfg(feature = "time")]
             clock: parts
                 .settings

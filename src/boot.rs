@@ -75,6 +75,8 @@ pub(crate) struct Parts {
     pub(crate) metrics: Option<crate::metrics_handle::MetricsRef>,
     #[cfg(feature = "audit")]
     pub(crate) audit: Option<crate::AuditLog>,
+    #[cfg(feature = "registry")]
+    pub(crate) events: Option<Arc<registry_io::SyncRegistry<crate::kernel::Event>>>,
     #[cfg(feature = "signals")]
     pub(crate) signals: Option<crate::kernel::signals::SignalIntake>,
     #[cfg(feature = "kernel")]
@@ -114,6 +116,8 @@ impl Parts {
             metrics: None,
             #[cfg(feature = "audit")]
             audit: None,
+            #[cfg(feature = "registry")]
+            events: None,
             #[cfg(feature = "signals")]
             signals: None,
             #[cfg(feature = "kernel")]
@@ -223,6 +227,21 @@ impl Parts {
             }
         }
 
+        // 4. Registry: no handler runs while the members close.
+        #[cfg(feature = "registry")]
+        if let Some(events) = self.events.clone() {
+            let outcome = run_with_deadline("registry", deadline.max(Instant::now()), move || {
+                events.clear_and_wait();
+            });
+            if matches!(outcome, Outcome::Abandoned) {
+                self.log.error(
+                    "an event handler was still running at the deadline and was abandoned",
+                    &[],
+                );
+                code = crate::exit::DEADLINE;
+            }
+        }
+
         // 5. Audit: every record is on disk before the members close.
         #[cfg(feature = "audit")]
         if let Some(audit) = self.audit.clone()
@@ -291,6 +310,8 @@ impl Parts {
             let stop_deadline = crate::lifecycle::Deadline::at(deadline);
             let result = Arc::new(std::sync::Mutex::new(None));
             let result_slot = Arc::clone(&result);
+            #[cfg(feature = "registry")]
+            let stop_began = Instant::now();
             let outcome = run_with_deadline(&format!("subsystem-{name}"), deadline, move || {
                 let stopped = stop_slot
                     .subsystem
@@ -301,6 +322,19 @@ impl Parts {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stopped);
             });
+            #[cfg(feature = "registry")]
+            {
+                let (took, met_deadline) = match outcome {
+                    Outcome::Done(took) => (took, true),
+                    Outcome::Panicked => (stop_began.elapsed(), true),
+                    Outcome::Abandoned => (stop_began.elapsed(), false),
+                };
+                self.kernel.emit(|| crate::kernel::Event::SubsystemStopped {
+                    name: name.clone(),
+                    took,
+                    met_deadline,
+                });
+            }
             match outcome {
                 Outcome::Done(took) => {
                     let failure = result
@@ -562,6 +596,8 @@ pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     steps.push((Step::Metrics, step_metrics));
     #[cfg(feature = "audit")]
     steps.push((Step::Audit, step_audit));
+    #[cfg(feature = "registry")]
+    steps.push((Step::Registry, step_registry));
     #[cfg(feature = "kernel")]
     steps.push((Step::Kernel, step_kernel));
     steps
@@ -1273,6 +1309,29 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
     }
     parts.kernel.set_audit(audit.clone());
     parts.audit = Some(audit);
+    Ok(())
+}
+
+/// Step 14: the kernel's event registry. With `Member::Registry` disabled
+/// the registry exists (its accessor does) but the kernel never notifies
+/// it.
+#[cfg(feature = "registry")]
+fn step_registry(parts: &mut Parts) -> Result<(), Error> {
+    let events = Arc::new(registry_io::SyncRegistry::new());
+    let log = parts.log.clone();
+    events.on_panic(move |panic| {
+        log.error(
+            "an event handler panicked; the other handlers ran",
+            &[(
+                "message",
+                Val::Str(panic.message().unwrap_or("non-string payload")),
+            )],
+        );
+    });
+    if !parts.settings.is_disabled(Member::Registry) {
+        parts.kernel.set_events(Arc::clone(&events));
+    }
+    parts.events = Some(events);
     Ok(())
 }
 

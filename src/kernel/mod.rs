@@ -26,6 +26,8 @@ use crate::{
 };
 
 pub(crate) mod crash;
+#[cfg(feature = "registry")]
+mod events;
 mod health;
 pub(crate) mod metrics;
 pub(crate) mod notify;
@@ -33,6 +35,8 @@ pub(crate) mod notify;
 pub(crate) mod signals;
 mod urgent;
 
+#[cfg(feature = "registry")]
+pub use events::Event;
 pub use health::{Component, ComponentHealth, Health, HealthReport, Status};
 pub use urgent::{Level, Notice, UrgentLine, Watch};
 
@@ -81,6 +85,8 @@ struct Control {
     metrics: OnceLock<metrics::KernelMetrics>,
     #[cfg(feature = "audit")]
     audit: OnceLock<crate::AuditLog>,
+    #[cfg(feature = "registry")]
+    events: OnceLock<Arc<registry_io::SyncRegistry<Event>>>,
 }
 
 /// A started subsystem, as the kernel holds it.
@@ -131,6 +137,8 @@ impl Kernel {
                 metrics: OnceLock::new(),
                 #[cfg(feature = "audit")]
                 audit: OnceLock::new(),
+                #[cfg(feature = "registry")]
+                events: OnceLock::new(),
             }),
         }
     }
@@ -142,7 +150,33 @@ impl Kernel {
     }
 
     pub(crate) fn set_phase(&self, phase: Phase) {
-        self.control.phase.store(phase as u8, Ordering::Release);
+        let before = self.control.phase.swap(phase as u8, Ordering::AcqRel);
+        #[cfg(feature = "registry")]
+        if before != phase as u8 {
+            self.emit(|| Event::Phase {
+                from: Phase::from_u8(before),
+                to: phase,
+            });
+        }
+        #[cfg(not(feature = "registry"))]
+        let _before = before;
+    }
+
+    /// Connects the kernel to the event registry (boot step 14).
+    #[cfg(feature = "registry")]
+    pub(crate) fn set_events(&self, events: Arc<registry_io::SyncRegistry<Event>>) {
+        let _first = self.control.events.set(events).is_ok();
+    }
+
+    /// Delivers an event to the registered callbacks, when the registry
+    /// is connected. The event is only built when someone can receive it.
+    #[cfg(feature = "registry")]
+    pub(crate) fn emit(&self, event: impl FnOnce() -> Event) {
+        if let Some(events) = self.control.events.get()
+            && !events.is_empty()
+        {
+            events.notify(&event());
+        }
     }
 
     /// Asks for a clean stop, exactly as a SIGTERM would. Returns `false`
@@ -307,6 +341,8 @@ impl Kernel {
         let urgent_metrics = metrics.clone();
         #[cfg(feature = "audit")]
         let urgent_audit = self.control.audit.get().cloned();
+        #[cfg(feature = "registry")]
+        let urgent_events = Arc::downgrade(&self.control);
         self.control.urgent.observe(Box::new(move |notice| {
             urgent_log.warn(
                 "urgent line changed",
@@ -317,6 +353,10 @@ impl Kernel {
                 ],
             );
             urgent_metrics.urgent(notice.level);
+            #[cfg(feature = "registry")]
+            if let Some(control) = urgent_events.upgrade() {
+                Kernel { control }.emit(|| Event::Urgent { notice });
+            }
             // A lockdown is a privileged action: it goes on the record.
             #[cfg(feature = "audit")]
             if notice.level == Level::Lockdown
@@ -349,6 +389,13 @@ impl Kernel {
                         ],
                     );
                     metrics.worker_restarted(&name);
+                    #[cfg(feature = "registry")]
+                    if let Some(control) = weak.upgrade() {
+                        Kernel { control }.emit(|| Event::WorkerRestarted {
+                            name: name.clone(),
+                            restarts,
+                        });
+                    }
                 }
                 crate::runtime::Event::WorkerFailed {
                     name,
@@ -360,6 +407,10 @@ impl Kernel {
                         &[("worker", Val::Str(&name)), ("reason", Val::Str(&reason))],
                     );
                     metrics.worker_failed(&name);
+                    #[cfg(feature = "registry")]
+                    if let Some(control) = weak.upgrade() {
+                        Kernel { control }.emit(|| Event::WorkerFailed { name: name.clone() });
+                    }
                     if critical && let Some(control) = weak.upgrade() {
                         let kernel = Kernel { control };
                         let _first = kernel.stop_for(StopReason::WorkerFailed { name });

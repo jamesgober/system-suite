@@ -175,6 +175,12 @@ pub use metrics_lib as metrics;
 #[cfg_attr(docsrs, doc(cfg(feature = "audit")))]
 pub use audit_trail as audit;
 
+/// Event and callback registry: [registry-io](https://docs.rs/registry-io).
+/// The kernel's events arrive on [`Foundation::events`].
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
+pub use registry_io as registry;
+
 /// Monotonic and wall clocks, mockable: [clock-lib](https://docs.rs/clock-lib).
 #[cfg(feature = "time")]
 #[cfg_attr(docsrs, doc(cfg(feature = "time")))]

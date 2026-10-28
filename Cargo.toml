@@ -92,8 +92,8 @@ ids = ["dep:id-forge"]
 # Tamper-evident audit records (audit-trail, sha2). Opt-in: dev/PLAN.md, D-035.
 audit = ["paths", "dep:audit-trail", "audit-trail/sha2"]
 
-# Event and callback registry (registry-io). Opt-in until the kernel needs it.
-registry = []
+# The kernel's events delivered to callbacks (registry-io). Opt-in.
+registry = ["kernel", "dep:registry-io"]
 
 # Process-wide globals (global-lib).
 globals = []
@@ -162,6 +162,10 @@ log-io = { version = "2.1", optional = true }
 # The audit chain; 1.1 for verified open and resume, owner-only files,
 # sync, and a clock that never goes back. Brings sha2 (in the register).
 audit-trail = { version = "1.1", optional = true, default-features = false, features = ["std"] }
+
+# Kernel events to callbacks, with panic isolation. First-party, no
+# dependencies with `sync` only (`async` would bring futures-core).
+registry-io = { version = "1.1", optional = true, default-features = false, features = ["sync"] }
 
 # Metrics. First-party; no dependencies with these features. `system`
 # (process metrics) is off: it brings sysinfo on the BSDs, not yet reviewed.

@@ -70,6 +70,16 @@ impl Reloader {
         if let Some(metrics) = self.kernel.metrics() {
             metrics.reload(result.is_ok());
         }
+        #[cfg(feature = "registry")]
+        match &result {
+            Ok(version) => self
+                .kernel
+                .emit(|| crate::kernel::Event::Reloaded { version: *version }),
+            Err(error) => self.kernel.emit(|| crate::kernel::Event::ReloadRefused {
+                by: error.subsystem().unwrap_or("configuration").to_owned(),
+                reason: error.to_string(),
+            }),
+        }
         #[cfg(feature = "audit")]
         {
             let target = match &result {

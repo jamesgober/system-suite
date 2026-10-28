@@ -849,3 +849,67 @@ fn test_reloads_and_lockdowns_are_audited() {
         assert!(text.contains(needle), "missing {needle}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Events (boot step 14)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "registry")]
+#[test]
+fn test_events_reach_handlers_and_a_panicking_handler_is_isolated() {
+    use system_suite::kernel::Event;
+
+    let root = Root::new("events");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    let journal = Journal::default();
+    let system = quiet("kernel-events", &root)
+        .config_file(&file)
+        .register(Recorder::new("store", Position::FIRST, &journal))
+        .start()
+        .unwrap();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&seen);
+    let _guard = system.events().register_guard(move |event: &Event| {
+        let line = match event {
+            Event::Phase { to, .. } => format!("phase {to}"),
+            Event::Reloaded { version } => format!("reloaded {version}"),
+            Event::ReloadRefused { by, .. } => format!("refused by {by}"),
+            Event::SubsystemStopped {
+                name, met_deadline, ..
+            } => {
+                format!("stopped {name} {met_deadline}")
+            }
+            Event::Urgent { notice } => format!("urgent {}", notice.level),
+            other => format!("{other:?}"),
+        };
+        sink.lock().unwrap().push(line);
+    });
+    let _boom = system
+        .events()
+        .register_guard(|_event: &Event| panic!("a handler that always panics"));
+
+    assert_eq!(system.reload().unwrap(), 2);
+    write_private(&file, "[app\n");
+    assert!(system.reload().is_err());
+    system
+        .kernel()
+        .urgent()
+        .set(system_suite::kernel::Level::Shed, "test")
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+
+    let seen = seen.lock().unwrap().clone();
+    for want in [
+        "reloaded 2",
+        "refused by configuration",
+        "urgent shed",
+        "phase draining",
+        "stopped store true",
+        "phase stopping",
+    ] {
+        assert!(
+            seen.iter().any(|line| line == want),
+            "missing {want} in {seen:?}"
+        );
+    }
+}
