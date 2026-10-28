@@ -1027,7 +1027,7 @@ fn test_t2_a_secret_file_others_can_read_is_refused() {
     write_private(&secret_file, "hunter2");
     fs::set_permissions(&secret_file, fs::Permissions::from_mode(0o640)).unwrap();
     let error = quiet("kernel-loose", &root)
-        .config_str(&format!(
+        .config_str(format!(
             "[db]\npassword = \"file:{}\"\n",
             secret_file.display()
         ))
