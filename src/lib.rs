@@ -33,7 +33,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! system-suite = { version = "0.3", default-features = false, features = ["sys"] }
+//! system-suite = { version = "0.4", default-features = false, features = ["sys"] }
 //! ```
 //!
 //! ```ignore
@@ -46,19 +46,22 @@
 //! ## Boot and shutdown
 //!
 //! [`start!`] runs the boot order of `docs/BOOT-ORDER.md`: build info,
-//! instance, paths, environment, the process guard, the signal intake,
-//! directories, logging, crash capture, the kernel, ready. A failing step
-//! stops the boot and unwinds what started; the [`Error`] names the step
-//! and what to do. [`System::run`] waits for a stop (SIGTERM, SIGINT,
-//! Ctrl+C, a console close, or `Kernel::request_stop`) and stops everything
-//! in reverse within a deadline.
+//! instance, paths, environment, configuration, the process guard, the
+//! signal intake, directories, logging, crash capture, metrics, the kernel,
+//! the application's subsystems, ready. A failing step stops the boot and
+//! unwinds what started; the [`Error`] names the step and what to do.
+//! [`System::run`] waits for a stop (SIGTERM, SIGINT, Ctrl+C, a console
+//! close, or `System::request_stop`) and stops everything in reverse within
+//! a deadline: the subsystems first, then the workers and timers, then the
+//! members.
 //!
 //! ## Status
 //!
-//! `0.3`: the first boot path. Configuration, metrics, subsystems, workers,
-//! and timers arrive in `0.4`; the rest in `0.5`. The public API is in
-//! `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in the
-//! [repository](https://github.com/jamesgober/system-suite)).
+//! `0.4`: configuration with two-phase reload, metrics, subsystems, the
+//! urgent line, supervised workers, timers, and health. Audit, the event
+//! registry, globals, randomness, and secrets arrive in `0.5`. The public
+//! API is in `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in
+//! the [repository](https://github.com/jamesgober/system-suite)).
 
 #![doc(html_root_url = "https://docs.rs/system-suite")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -81,6 +84,9 @@
 
 mod boot;
 mod builder;
+#[cfg(feature = "config")]
+#[cfg_attr(docsrs, doc(cfg(feature = "config")))]
+pub mod config;
 mod error;
 pub mod exit;
 #[cfg(feature = "kernel")]
@@ -89,14 +95,31 @@ pub mod kernel;
 pub mod lifecycle;
 mod logging;
 mod member;
-#[cfg(any(feature = "log", feature = "signals"))]
+#[cfg(feature = "metrics")]
+mod metrics_handle;
+#[cfg(feature = "kernel")]
+pub mod runtime;
+// Without `config` only the defaults exist, so some values are never built.
+#[cfg_attr(not(feature = "config"), allow(dead_code))]
+mod sections;
+#[cfg(any(feature = "env", feature = "config"))]
+mod secure_file;
+#[cfg(any(feature = "log", feature = "signals", feature = "kernel"))]
 mod shutdown;
+mod snapshot;
+#[cfg(feature = "kernel")]
+mod staged;
+#[cfg(feature = "kernel")]
+mod sync;
 mod system;
 
+#[cfg(feature = "kernel")]
+pub use crate::staged::Boot;
 pub use crate::{
     builder::Builder,
     error::{Error, ErrorKind, Result},
     member::{Member, Step},
+    snapshot::{Reader, Snapshot},
     system::{Foundation, System},
 };
 
@@ -134,6 +157,12 @@ pub use log_io as log;
 #[cfg(feature = "signals")]
 #[cfg_attr(docsrs, doc(cfg(feature = "signals")))]
 pub use signal_mod as signal;
+
+/// Metrics: [metrics-lib](https://docs.rs/metrics-lib). The registry the
+/// system uses is [`Foundation::metrics`].
+#[cfg(feature = "metrics")]
+#[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
+pub use metrics_lib as metrics;
 
 /// Monotonic and wall clocks, mockable: [clock-lib](https://docs.rs/clock-lib).
 #[cfg(feature = "time")]

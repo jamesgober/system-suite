@@ -13,6 +13,91 @@
 
 ---
 
+## [0.4.0] - 2026-10-28
+
+Extended: configuration, metrics, the application's subsystems, and the
+kernel's services.
+
+### Added
+
+- Configuration (feature `config`, config-lib 1.1 in its `conf` format):
+  `config::Config` (`from_text`, `get`, `require`, `get_or`, `contains`,
+  `keys`, `source`, `version`, `backend`), the sealed `FromConfig` for
+  booleans, integers (range-checked), `f64`, `String`, `PathBuf`,
+  `Duration` (`30` or `"500ms"`, `"30s"`, `"5m"`, `"2h"`), and lists;
+  `Builder::config_file` and `config_str`; `Foundation::config` and
+  `config_snapshot`. Boot step 5 finds the file (builder, `<NAME>_CONFIG`
+  from the process environment or the `.env` file, the configuration
+  directory, the working directory when not elevated), checks it, parses
+  it, and validates the suite's sections (`[guard]`, `[log]`, `[crash]`,
+  `[metrics]`, `[kernel]`, `[ids]`), refusing unknown keys.
+- Reload: `System::reload` and SIGHUP read the configuration again,
+  validate it, let every subsystem prepare its change, and only then
+  publish it and commit every change; otherwise nothing changes (T7).
+- `Snapshot` and `Reader`: a value replaced whole and read for about a
+  nanosecond per call when unchanged.
+- Subsystems: `lifecycle::{Subsystem, Position, Link, Mailbox, Failure,
+  Commit}`, `Builder::register` and `on_ready`; boot step 16 starts them by
+  position, the shutdown stops them in reverse, each within the deadline.
+- `Builder::boot` and `Boot` (`foundation`, `kernel`, `start`, `ready`):
+  the staged start for frameworks.
+- The urgent line: `kernel::{UrgentLine, Level, Watch, Notice}`; every
+  change reaches each subsystem's mailbox and is logged and counted.
+- `runtime::{Runtime, Worker, WorkerContext, WorkerHandle, WorkerState,
+  Restart, Backoff, TimerHandle}`: supervised worker threads with restart
+  policies, jittered backoff, restart budgets, criticality, and heartbeats;
+  periodic and one-shot timers on one thread that sleeps when nothing is
+  due.
+- Health: `kernel::{Health, Status, HealthReport, Component,
+  ComponentHealth}`, `System::health` and `status` (`ready`, `live`, JSON
+  and key-value output); the dump signal writes it.
+- Metrics (feature `metrics`, metrics-lib 2): `Foundation::metrics`, the
+  `metrics` module, and the kernel's own metrics (`system_suite_*`);
+  pass-throughs `metrics-histogram`, `metrics-meter`, `metrics-statsd`,
+  `metrics-http`.
+- Opt-in interop and formats (accepted by James, D-056): `log-bridge`
+  (records from the `log` facade go to the suite's logger), `log-tracing`
+  (`log::compat::TracingLayer`), `metrics-tracing`, `config-toml` and
+  `config-noml` (`<name>.toml`, `<name>.noml`; the format follows the
+  extension, and two candidate files are refused).
+- `loom` model tests of the urgent line and worker heartbeats, in their own
+  CI job (`cfg(loom)`, development only).
+- `System::request_stop`, `System::runtime`, `Foundation::runtime`,
+  `Builder::member_reserve`.
+- systemd: `STATUS=` lines and the `WATCHDOG=1` keep-alive when
+  `WATCHDOG_USEC` is set, sent only while the system is not unhealthy.
+- `ErrorKind::{ConfigNotFound, ConfigInsecure, ConfigInvalid, Secret,
+  Metrics, Subsystem, Stopping, ReloadRefused, UrgentRefused}`.
+- Tests: the subsystem-level T6 test (a `stop` that never returns is
+  abandoned, the exit code is 79, and the next subsystem is still
+  stopped); T7 (a broken file, an unknown key, a refusing subsystem, and a
+  secret reference each change nothing); failure injection at step 5 and
+  for the `.env` file; SIGHUP reload and the dump signal in a child
+  process; workers, timers, the urgent line, and `Boot`.
+
+### Changed
+
+- The `.env` file is refused when another user can change it, as the
+  configuration file is (it can name the configuration file).
+- The configuration file's owner and mode are checked on the opened file,
+  so the file checked is the file read (D-049).
+- The logger, the guard, crash capture, and the Snowflake worker id take
+  their settings from the configuration; the builder still wins.
+- `Builder::single_instance`, `crash_capture`, and `shutdown_deadline` set
+  an override; when not called, the configuration decides.
+- SIGHUP reloads the configuration (it logged "nothing to reload" in 0.3).
+- Timers are a min-heap of due times rather than a timing wheel (D-046).
+
+### Removed
+
+- `[config] allow_insecure_file` from the design: there is no switch to
+  accept a configuration file another user can change (D-048).
+- `[metrics] process` (it needs `sysinfo`, which was not accepted), and
+  `config-json`, `config-xml`, `config-validation`, `metrics-json`,
+  `metrics-otlp`, which wait on first-party crates (D-056).
+
+---
+
 ## [0.3.0] - 2026-10-23
 
 The first boot path: a service boots with one call, logs, parks with zero
@@ -129,7 +214,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jamesgober/system-suite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/system-suite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/system-suite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/system-suite/releases/tag/v0.1.0

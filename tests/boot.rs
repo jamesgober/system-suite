@@ -12,6 +12,7 @@
     feature = "sys",
     feature = "paths",
     feature = "env",
+    feature = "config",
     feature = "log",
     feature = "signals"
 ))]
@@ -49,6 +50,9 @@ fn child() {
         "boot" => boot_only(&root),
         "env-file-missing" => env_file_missing(&root),
         "panic" => panic_after_boot(&root),
+        "reload-watch" => reload_watch(&root),
+        #[cfg(feature = "log-bridge")]
+        "log-bridge" => log_bridge(&root),
         other => panic!("unknown scenario {other}"),
     };
     std::process::exit(i32::from(code));
@@ -113,13 +117,58 @@ fn panic_after_boot(_root: &Path) -> u8 {
     panic!("boom: the worker lost its database");
 }
 
+/// Boots, says READY, prints `VERSION <n>` each time the configuration
+/// version changes, and runs until a stop.
+fn reload_watch(_root: &Path) -> u8 {
+    let system = match System::builder(&name()).start() {
+        Ok(system) => system,
+        Err(error) => return report(&error),
+    };
+    let snapshot = system.config_snapshot().clone();
+    let kernel = system.kernel().clone();
+    thread::spawn(move || {
+        let mut seen = snapshot.version();
+        while kernel.stop_reason().is_none() {
+            let version = snapshot.version();
+            if version != seen {
+                seen = version;
+                println!("VERSION {version}");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+    println!("READY");
+    let code = system.run();
+    if code == std::process::ExitCode::SUCCESS {
+        0
+    } else {
+        1
+    }
+}
+
+/// Boots, logs through the `log` facade, and shuts down.
+#[cfg(feature = "log-bridge")]
+fn log_bridge(_root: &Path) -> u8 {
+    match System::builder(&name()).start() {
+        Ok(system) => {
+            log::warn!(target: "facade", "a record from the log facade");
+            let _code = system.shutdown();
+            0
+        }
+        Err(error) => report(&error),
+    }
+}
+
 fn exit_value(kind: ErrorKind) -> u8 {
     match kind {
         ErrorKind::Setup => exit::USAGE,
         ErrorKind::Paths | ErrorKind::Logging => exit::CANTCREAT,
-        ErrorKind::Environment => exit::CONFIG,
+        ErrorKind::Environment
+        | ErrorKind::ConfigNotFound
+        | ErrorKind::ConfigInvalid
+        | ErrorKind::Secret => exit::CONFIG,
         ErrorKind::AlreadyRunning => exit::TEMPFAIL,
-        ErrorKind::LockDirInsecure => exit::NOPERM,
+        ErrorKind::LockDirInsecure | ErrorKind::ConfigInsecure => exit::NOPERM,
         ErrorKind::Limits => exit::UNAVAILABLE,
         ErrorKind::Interrupted => exit::OK,
         ErrorKind::Io => exit::IOERR,
@@ -292,6 +341,18 @@ fn log_text(logs: &Path, name: &str) -> String {
     fs::read_to_string(logs.join(format!("{name}.log"))).unwrap_or_default()
 }
 
+/// Writes a file only its owner can change (whatever the umask), as a
+/// configuration or `.env` file must be.
+fn write_private(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Boot and shutdown
 // ---------------------------------------------------------------------------
@@ -347,6 +408,78 @@ fn test_sigint_stops_with_zero() {
     assert!(status.success());
     assert_eq!(wait(&mut child).code(), Some(0));
     assert!(log_text(&logs, "it-int").contains("SIGINT"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_sighup_reloads_and_a_broken_file_changes_nothing() {
+    let scenario = Scenario::new("it-hup");
+    let file = scenario.dir("config").join("it-hup.conf");
+    write_private(&file, "[app]\nlimit = 1\n");
+    let mut child = scenario
+        .command("reload-watch")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let lines = std::sync::mpsc::channel::<String>();
+    let stdout = child.stdout.take().unwrap();
+    let sender = lines.0;
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { return };
+            if sender.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let next = |want: &str| loop {
+        match lines.1.recv_timeout(WAIT) {
+            Ok(line) if line.trim_end().ends_with(want) => return,
+            Ok(_) => {}
+            Err(_) => panic!("no {want} line from the child"),
+        }
+    };
+    let signal = |name: &str, pid: u32| {
+        let status = Command::new("kill")
+            .args([name, &pid.to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    next("READY");
+
+    // A broken file: the reload is refused and the version stays at 1.
+    write_private(&file, "[app\nlimit = 2\n");
+    signal("-HUP", child.id());
+    thread::sleep(Duration::from_millis(500));
+    // A valid file: version 2. Had the broken one been applied, this
+    // would print VERSION 3.
+    write_private(&file, "[app]\nlimit = 3\n");
+    signal("-USR1", child.id());
+    signal("-HUP", child.id());
+    next("VERSION 2");
+    thread::sleep(Duration::from_millis(200));
+    signal("-TERM", child.id());
+    assert_eq!(wait(&mut child).code(), Some(0));
+
+    let log = log_text(&scenario.dir("logs"), "it-hup");
+    assert!(log.contains("configuration reload refused"), "{log}");
+    assert!(log.contains("\"configuration reloaded\""), "{log}");
+    assert!(
+        log.contains("\"state\""),
+        "the dump signal wrote nothing:\n{log}"
+    );
+}
+
+#[cfg(feature = "log-bridge")]
+#[test]
+fn test_log_facade_records_reach_the_systems_log() {
+    let scenario = Scenario::new("it-logbridge");
+    let output = scenario.run("log-bridge");
+    assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
+    let log = log_text(&scenario.dir("logs"), "it-logbridge");
+    assert!(log.contains("a record from the log facade"), "{log}");
 }
 
 #[cfg(windows)]
@@ -616,10 +749,103 @@ fn test_t4_environment_step_fails_on_a_missing_explicit_file() {
 #[test]
 fn test_t4_environment_step_fails_on_a_malformed_file() {
     let scenario = Scenario::new("it-envbad");
-    let config = scenario.dir("config");
-    fs::create_dir_all(&config).unwrap();
-    fs::write(config.join(".env"), "this line has no equals sign\n").unwrap();
+    write_private(
+        &scenario.dir("config").join(".env"),
+        "this line has no equals sign\n",
+    );
     assert_boot_fails(&scenario.run("boot"), "step 4 (environment)", exit::CONFIG);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_t4_environment_step_refuses_a_file_others_can_change() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // The .env file can name the configuration file, so a .env file another
+    // user can change is refused before it is read.
+    let scenario = Scenario::new("it-envmode");
+    let file = scenario.dir("config").join(".env");
+    write_private(&file, "PORT=8080\n");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).unwrap();
+    assert_boot_fails(&scenario.run("boot"), "step 4 (environment)", exit::NOPERM);
+}
+
+#[test]
+fn test_t4_configuration_step_fails_on_a_missing_named_file() {
+    let mut scenario = Scenario::new("it-confmissing");
+    let missing = scenario.root.join("missing.conf").display().to_string();
+    scenario.set("CONFIG", &missing);
+    assert_boot_fails(
+        &scenario.run("boot"),
+        "step 5 (configuration)",
+        exit::CONFIG,
+    );
+}
+
+#[test]
+fn test_t4_configuration_step_follows_the_env_file_redirect() {
+    let scenario = Scenario::new("it-confredirect");
+    let missing = scenario.root.join("elsewhere.conf");
+    write_private(
+        &scenario.dir("config").join(".env"),
+        &format!("CONFIG={}\n", missing.display()),
+    );
+    let output = scenario.run("boot");
+    assert_boot_fails(&output, "step 5 (configuration)", exit::CONFIG);
+    assert!(text(&output.stderr).contains("elsewhere.conf"));
+}
+
+#[test]
+fn test_t4_configuration_step_fails_on_an_invalid_file() {
+    let scenario = Scenario::new("it-confbad");
+    let file = scenario.dir("config").join("it-confbad.conf");
+    for content in [
+        "[log\nlevel = \"info\"\n",
+        "[log]\nlevel = \"loud\"\n",
+        "[db]\npassword = \"file:/run/secrets/db\"\n",
+    ] {
+        write_private(&file, content);
+        let output = scenario.run("boot");
+        assert_boot_fails(&output, "step 5 (configuration)", exit::CONFIG);
+        assert!(
+            !text(&output.stderr).contains("/run/secrets/db"),
+            "{}",
+            text(&output.stderr)
+        );
+    }
+    assert!(
+        !scenario.dir("runtime").exists(),
+        "the guard ran after a failed step"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_t4_configuration_step_refuses_a_file_others_can_change() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let scenario = Scenario::new("it-confmode");
+    let file = scenario.dir("config").join("it-confmode.conf");
+    write_private(&file, "[log]\nlevel = \"info\"\n");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o620)).unwrap();
+    assert_boot_fails(
+        &scenario.run("boot"),
+        "step 5 (configuration)",
+        exit::NOPERM,
+    );
+}
+
+#[test]
+fn test_configuration_file_settings_take_effect() {
+    let scenario = Scenario::new("it-confok");
+    write_private(
+        &scenario.dir("config").join("it-confok.conf"),
+        "[log]\nfile = false\n[guard]\nlock = false\n",
+    );
+    let output = scenario.run("boot");
+    assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
+    assert!(!scenario.dir("logs").join("it-confok.log").exists());
+    assert!(!scenario.dir("runtime").exists());
 }
 
 #[cfg(unix)]
