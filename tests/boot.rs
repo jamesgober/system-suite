@@ -53,6 +53,8 @@ fn child() {
         "reload-watch" => reload_watch(&root),
         #[cfg(feature = "log-bridge")]
         "log-bridge" => log_bridge(&root),
+        #[cfg(feature = "globals")]
+        "globals" => globals(&root),
         other => panic!("unknown scenario {other}"),
     };
     std::process::exit(i32::from(code));
@@ -157,6 +159,29 @@ fn log_bridge(_root: &Path) -> u8 {
         }
         Err(error) => report(&error),
     }
+}
+
+/// Checks that `foundation()` is published while the system runs and
+/// withdrawn when it stops.
+#[cfg(feature = "globals")]
+fn globals(_root: &Path) -> u8 {
+    assert!(
+        system_suite::foundation().is_none(),
+        "published before boot"
+    );
+    let system = match System::builder(&name()).start() {
+        Ok(system) => system,
+        Err(error) => return report(&error),
+    };
+    let published = system_suite::foundation().map(|f| f.name().to_owned());
+    assert_eq!(published.as_deref(), Some(name().as_str()));
+    let _code = system.shutdown();
+    assert!(
+        system_suite::foundation().is_none(),
+        "still published after shutdown"
+    );
+    println!("GLOBALS OK");
+    0
 }
 
 fn exit_value(kind: ErrorKind) -> u8 {
@@ -480,6 +505,15 @@ fn test_log_facade_records_reach_the_systems_log() {
     assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
     let log = log_text(&scenario.dir("logs"), "it-logbridge");
     assert!(log.contains("a record from the log facade"), "{log}");
+}
+
+#[cfg(feature = "globals")]
+#[test]
+fn test_foundation_is_published_while_running() {
+    let scenario = Scenario::new("it-globals");
+    let output = scenario.run("globals");
+    assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
+    assert!(text(&output.stdout).contains("GLOBALS OK"));
 }
 
 #[cfg(windows)]

@@ -99,7 +99,10 @@ impl Settings {
         feature = "paths",
         feature = "signals",
         feature = "metrics",
-        feature = "config"
+        feature = "config",
+        feature = "audit",
+        feature = "registry",
+        feature = "globals"
     ))]
     pub(crate) fn is_disabled(&self, member: Member) -> bool {
         self.disabled.contains(&member)

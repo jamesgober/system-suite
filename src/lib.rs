@@ -91,6 +91,8 @@ mod builder;
 pub mod config;
 mod error;
 pub mod exit;
+#[cfg(feature = "globals")]
+mod globals;
 #[cfg(feature = "kernel")]
 pub mod kernel;
 #[cfg(feature = "kernel")]
@@ -118,6 +120,9 @@ mod system;
 #[cfg(feature = "audit")]
 #[cfg_attr(docsrs, doc(cfg(feature = "audit")))]
 pub use crate::audit_log::AuditLog;
+#[cfg(feature = "globals")]
+#[cfg_attr(docsrs, doc(cfg(feature = "globals")))]
+pub use crate::globals::foundation;
 #[cfg(feature = "kernel")]
 pub use crate::staged::Boot;
 pub use crate::{
@@ -180,6 +185,18 @@ pub use audit_trail as audit;
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use registry_io as registry;
+
+/// Process-wide typed values: [global-lib](https://docs.rs/global-lib).
+#[cfg(feature = "globals")]
+#[cfg_attr(docsrs, doc(cfg(feature = "globals")))]
+pub use global_lib as global;
+
+/// Tiered randomness: [mod-rand](https://docs.rs/mod-rand). Tokens and
+/// nonces come from `rand::tier3` (the OS CSPRNG). A project that also
+/// uses the `rand` crate writes `use system_suite::rand as srand;`.
+#[cfg(feature = "rand")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
+pub use mod_rand as rand;
 
 /// Monotonic and wall clocks, mockable: [clock-lib](https://docs.rs/clock-lib).
 #[cfg(feature = "time")]

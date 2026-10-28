@@ -273,6 +273,11 @@ impl System {
                 metrics.boot_milliseconds(boot_ms);
             }
         }
+        #[cfg(feature = "globals")]
+        if parts.settings.process_wide && !parts.settings.is_disabled(crate::Member::Globals) {
+            crate::globals::publish(&foundation);
+            parts.published = true;
+        }
         parts.notify("READY=1");
         parts.notify("STATUS=ready");
         parts.mark_ready();

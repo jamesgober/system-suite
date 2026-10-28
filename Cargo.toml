@@ -95,11 +95,12 @@ audit = ["paths", "dep:audit-trail", "audit-trail/sha2"]
 # The kernel's events delivered to callbacks (registry-io). Opt-in.
 registry = ["kernel", "dep:registry-io"]
 
-# Process-wide globals (global-lib).
-globals = []
+# Process-wide globals (global-lib): `system_suite::foundation()`.
+globals = ["dep:global-lib"]
 
-# Randomness, including the OS CSPRNG (mod-rand).
-rand = []
+# Randomness, including the OS CSPRNG (mod-rand); boot step 2 checks the
+# OS source works.
+rand = ["dep:mod-rand"]
 
 # Page-locked secret storage (key-vault). Opt-in.
 secrets = []
@@ -166,6 +167,13 @@ audit-trail = { version = "1.1", optional = true, default-features = false, feat
 # Kernel events to callbacks, with panic isolation. First-party, no
 # dependencies with `sync` only (`async` would bring futures-core).
 registry-io = { version = "1.1", optional = true, default-features = false, features = ["sync"] }
+
+# Process-wide typed values. First-party, no dependencies.
+global-lib = { version = "1.0", optional = true }
+
+# Tiered randomness: the OS CSPRNG and process-unique values. First-party,
+# no dependencies.
+mod-rand = { version = "1.0", optional = true, default-features = false, features = ["std", "tier2", "tier3"] }
 
 # Metrics. First-party; no dependencies with these features. `system`
 # (process metrics) is off: it brings sysinfo on the BSDs, not yet reviewed.

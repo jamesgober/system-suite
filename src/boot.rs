@@ -82,6 +82,8 @@ pub(crate) struct Parts {
     #[cfg(feature = "kernel")]
     pub(crate) crash: Option<crate::kernel::crash::CrashHook>,
     notified_ready: bool,
+    #[cfg(feature = "globals")]
+    pub(crate) published: bool,
 }
 
 impl Parts {
@@ -123,6 +125,8 @@ impl Parts {
             #[cfg(feature = "kernel")]
             crash: None,
             notified_ready: false,
+            #[cfg(feature = "globals")]
+            published: false,
         }
     }
 
@@ -183,6 +187,11 @@ impl Parts {
                 .kernel
                 .urgent()
                 .raise(Level::Draining, "stop requested");
+        }
+        #[cfg(feature = "globals")]
+        if self.published {
+            crate::globals::withdraw();
+            self.published = false;
         }
         if self.notified_ready {
             self.notify("STOPPING=1");
@@ -574,7 +583,7 @@ pub(crate) fn run_steps(parts: &mut Parts, steps: &[(Step, StepFn)]) -> Result<(
 pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     let mut steps: Vec<(Step, StepFn)> = Vec::with_capacity(17);
     steps.push((Step::BuildInfo, step_build_info));
-    #[cfg(feature = "sys")]
+    #[cfg(any(feature = "sys", feature = "rand"))]
     steps.push((Step::Instance, step_instance));
     #[cfg(feature = "paths")]
     steps.push((Step::Paths, step_paths));
@@ -662,9 +671,29 @@ fn step_build_info(_parts: &mut Parts) -> Result<(), Error> {
 }
 
 /// Step 2: the instance (id, start time, host, pid, user).
-#[cfg(feature = "sys")]
+#[cfg(any(feature = "sys", feature = "rand"))]
 fn step_instance(parts: &mut Parts) -> Result<(), Error> {
-    parts.instance = Some(sys_lib::Instance::start());
+    // A sandbox that blocks the OS random source would otherwise surface
+    // later as a confusing failure in a token generator or the vault.
+    #[cfg(feature = "rand")]
+    {
+        let mut probe = [0_u8; 16];
+        mod_rand::tier3::fill_bytes(&mut probe).map_err(|e| {
+            Error::new(
+                ErrorKind::Entropy,
+                format!("the OS random source is unavailable: {e}"),
+                "allow getrandom (Linux), getentropy (macOS), or BCryptGenRandom (Windows) for the process",
+            )
+            .member_of(Member::Rand)
+            .caused_by(e)
+        })?;
+    }
+    #[cfg(feature = "sys")]
+    {
+        parts.instance = Some(sys_lib::Instance::start());
+    }
+    #[cfg(not(feature = "sys"))]
+    let _no_instance = parts;
     Ok(())
 }
 
