@@ -1,6 +1,6 @@
 # system-suite boot benchmark baseline: measure<TAB>median
-boot to ready	311600.0
-stop to exit	206000.0
+boot to ready	309500.0
+stop to exit	209800.0
 urgent-line check	0.2
 snapshot read, unchanged	0.3
 heap held by a booted system	99.4
