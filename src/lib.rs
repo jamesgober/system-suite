@@ -111,7 +111,7 @@ mod secrets;
 // Without `config` only the defaults exist, so some values are never built.
 #[cfg_attr(not(feature = "config"), allow(dead_code))]
 mod sections;
-#[cfg(any(feature = "env", feature = "config"))]
+#[cfg(any(feature = "env", feature = "config", feature = "audit"))]
 mod secure_file;
 #[cfg(any(feature = "log", feature = "signals", feature = "kernel"))]
 mod shutdown;
