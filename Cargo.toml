@@ -213,6 +213,15 @@ loom = "0.7"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
 
+# BENCHMARKS
+# #################################
+# The boot benchmark harness (D-068): std only, `harness = false`.
+[[bench]]
+name = "boot"
+harness = false
+required-features = ["kernel", "sys", "paths", "config", "log"]
+
+
 # RELEASE PROFILE
 # #################################
 [profile.release]
