@@ -270,13 +270,6 @@ fn idle_and_memory() -> Vec<Measure> {
             unit: "switches",
             gated: false,
         },
-        Measure {
-            name: "memory added by a booted system",
-            median: after.saturating_sub(before) as f64,
-            p95: after.saturating_sub(before) as f64,
-            unit: "KiB",
-            gated: false,
-        },
     ]
 }
 
