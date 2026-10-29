@@ -291,15 +291,24 @@ impl Kernel {
     #[must_use]
     pub fn status(&self) -> Status {
         let mut status = self.control.runtime.inner.timers.status();
-        {
-            let slots = self
-                .control
-                .subsystems
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            for slot in slots.iter() {
-                status = status.max(slot.health().status());
-            }
+        // One slot at a time, with the list unlocked while the subsystem's
+        // own `health` runs: it may call back into the kernel, and a slow
+        // one must not hold up the shutdown's `pop_slot`. No allocation.
+        let mut index = 0;
+        loop {
+            let slot = {
+                let slots = self
+                    .control
+                    .subsystems
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                match slots.get(index) {
+                    Some(slot) => Arc::clone(slot),
+                    None => break,
+                }
+            };
+            status = status.max(slot.health().status());
+            index += 1;
         }
         let workers = self
             .control

@@ -59,7 +59,7 @@ struct Shared {
     #[cfg(feature = "env")]
     env: env_lib::Env,
     #[cfg(feature = "config")]
-    config: crate::Snapshot<crate::config::Config>,
+    config: crate::SnapshotView<crate::config::Config>,
     #[cfg(feature = "log")]
     log: log_io::Logger,
     #[cfg(feature = "metrics")]
@@ -138,7 +138,7 @@ impl Foundation {
     /// [`Reader`](crate::Reader) that sees each reload at its next `get`.
     #[cfg(feature = "config")]
     #[must_use]
-    pub fn config_snapshot(&self) -> &crate::Snapshot<crate::config::Config> {
+    pub fn config_snapshot(&self) -> &crate::SnapshotView<crate::config::Config> {
         &self.shared.config
     }
 
@@ -419,7 +419,7 @@ impl System {
     /// See [`Foundation::config_snapshot`].
     #[cfg(feature = "config")]
     #[must_use]
-    pub fn config_snapshot(&self) -> &crate::Snapshot<crate::config::Config> {
+    pub fn config_snapshot(&self) -> &crate::SnapshotView<crate::config::Config> {
         self.foundation.config_snapshot()
     }
 
@@ -674,7 +674,8 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
             #[cfg(feature = "config")]
             config: parts
                 .config
-                .clone()
+                .as_ref()
+                .map(crate::Snapshot::view)
                 .ok_or_else(|| missing("the configuration"))?,
             #[cfg(feature = "log")]
             log: parts.logger.clone().ok_or_else(|| missing("the logger"))?,

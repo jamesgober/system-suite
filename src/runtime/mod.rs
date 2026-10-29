@@ -190,8 +190,10 @@ impl Runtime {
         for worker in &workers {
             worker.stop();
         }
-        self.inner.timers.stop(deadline);
         let mut late = Vec::new();
+        if !self.inner.timers.stop(deadline) {
+            late.push("the timer thread".to_owned());
+        }
         for worker in workers {
             if !worker.join_until(deadline) {
                 late.push(worker.name().to_owned());

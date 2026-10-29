@@ -176,10 +176,14 @@ impl Worker {
                 .workers
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            if workers
-                .iter()
-                .any(|w| w.name() == self.name && w.state() != WorkerState::Stopped)
-            {
+            // Workers that stopped are dropped from the list, so spawning
+            // short-lived workers does not grow it; a failed worker stays
+            // (it is part of health) but its name may be spawned again.
+            workers.retain(|w| w.state() != WorkerState::Stopped);
+            if workers.iter().any(|w| {
+                w.name() == self.name
+                    && matches!(w.state(), WorkerState::Running | WorkerState::BackingOff)
+            }) {
                 return Err(Error::new(
                     ErrorKind::Setup,
                     format!("a worker named {} is already running", self.name),
@@ -314,14 +318,12 @@ fn give_up(cx: &WorkerContext, reason: String) {
     });
 }
 
-fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(text) = payload.downcast_ref::<&str>() {
-        format!("panicked: {text}")
-    } else if let Some(text) = payload.downcast_ref::<String>() {
-        format!("panicked: {text}")
-    } else {
-        "panicked".to_owned()
-    }
+/// The reason recorded for a panic. Not the payload: health reports are
+/// served to whoever can reach the endpoint, and a panic message from std
+/// or a dependency can quote data. The message itself is in the log (the
+/// crash hook) and the crash report.
+fn panic_text(_payload: &(dyn std::any::Any + Send)) -> String {
+    "panicked (the message is in the log)".to_owned()
 }
 
 /// A worker's last heartbeat, in milliseconds since it started: written
@@ -767,6 +769,18 @@ mod tests {
         let _late = rt.stop(Instant::now() + Duration::from_secs(5));
         let after = Worker::new("late").spawn(&rt, |_| Ok(())).err();
         assert_eq!(after.map(|e| e.kind()), Some(ErrorKind::Stopping));
+    }
+
+    #[test]
+    fn test_a_name_is_free_again_once_its_worker_stopped() {
+        let rt = runtime();
+        let first = Worker::new("again")
+            .spawn(&rt, |_| Ok(()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(wait_for(&first, WorkerState::Stopped));
+        let second = Worker::new("again").spawn(&rt, |_| Ok(()));
+        assert!(second.is_ok(), "a stopped worker's name stayed taken");
+        let _late = rt.stop(Instant::now() + Duration::from_secs(5));
     }
 
     #[test]

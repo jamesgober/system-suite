@@ -132,7 +132,7 @@ pub use crate::{
     builder::Builder,
     error::{Error, ErrorKind, Result},
     member::{Member, Step},
-    snapshot::{Reader, Snapshot},
+    snapshot::{Reader, Snapshot, SnapshotView},
     system::{Foundation, System},
 };
 

@@ -792,7 +792,7 @@ The typed handles of every enabled member, built once at boot. It is what a fram
 | `paths(&self)` | `&path::App` | `paths` | 0.3 |
 | `env(&self)` | `&env::Env` | `env` | 0.3 |
 | `config(&self)` | `config::Config` (the current snapshot; cheap clone) | `config` | 0.4 |
-| `config_snapshot(&self)` | `&Snapshot<config::Config>` (for a per-thread `Reader`) | `config` | 0.4 |
+| `config_snapshot(&self)` | `&SnapshotView<config::Config>` (for a per-thread `Reader`; read-only since 0.7, D-074) | `config` | 0.4 |
 | `log(&self)` | `&log::Logger` | `log` | 0.3 |
 | `metrics(&self)` | `&metrics::MetricsCore` | `metrics` | 0.4 |
 | `clock(&self)` | `&dyn clock::Clock` | `time` | 0.3 |

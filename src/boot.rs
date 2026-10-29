@@ -240,8 +240,8 @@ impl Parts {
                 .max(Instant::now());
             for late in self.kernel.runtime().stop(workers_deadline) {
                 self.log.error(
-                    "worker did not stop by the deadline and was abandoned",
-                    &[("worker", Val::Str(&late))],
+                    "a runtime thread did not stop by the deadline and was abandoned",
+                    &[("thread", Val::Str(&late))],
                 );
                 code = crate::exit::DEADLINE;
             }
@@ -1070,16 +1070,20 @@ fn step_secrets(parts: &mut Parts) -> Result<(), Error> {
         #[cfg(feature = "env")]
         parts.env.clone(),
     ));
-    if !parts.settings.is_disabled(Member::Secrets)
-        && let Some(snapshot) = &parts.config
-    {
+    if let Some(snapshot) = &parts.config {
         let config = snapshot.load();
-        let table = state.stage(
-            &config,
-            parts.sections.secrets.allow_plain,
-            config.version(),
-        )?;
-        state.accept(table);
+        if parts.settings.is_disabled(Member::Secrets) {
+            // Disabled at run time: a reference is refused, as without the
+            // feature, so it is never read as a literal.
+            crate::config::load::refuse_references(&config)?;
+        } else {
+            let table = state.stage(
+                &config,
+                parts.sections.secrets.allow_plain,
+                config.version(),
+            )?;
+            state.accept(table);
+        }
     }
     parts.secrets = Some(state);
     Ok(())

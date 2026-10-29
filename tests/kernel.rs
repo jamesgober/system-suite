@@ -804,6 +804,35 @@ fn test_a_cut_audit_tail_fails_until_repair_is_allowed() {
     assert_eq!(kept.len(), 1, "the cut bytes were not kept");
 }
 
+#[cfg(feature = "secrets")]
+#[test]
+fn test_disabled_secrets_still_refuse_references() {
+    let root = Root::new("nosecrets");
+    let file = root.write_config("[db]\npassword = \"env:SYSTEM_SUITE_KERNEL_UNSET\"\n");
+    let error = quiet("kernel-nosecrets", &root)
+        .config_file(&file)
+        .disable(Member::Secrets)
+        .start()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::Secret, "{error}");
+}
+
+#[test]
+fn test_a_reload_with_a_bad_deadline_is_refused() {
+    let root = Root::new("baddeadline");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    let system = quiet("kernel-baddeadline", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    write_private(&file, "[kernel]\nshutdown_deadline = \"0s\"\n");
+    let error = system.reload().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::ConfigInvalid);
+    assert_eq!(system.config_snapshot().version(), 1);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
 #[cfg(feature = "audit")]
 #[test]
 fn test_disabled_audit_refuses_records() {

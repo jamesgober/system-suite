@@ -138,10 +138,7 @@ fn capture(state: &CrashState, info: &PanicHookInfo<'_>) {
     let report = render(&state.settings, &message, &location, &thread_name);
     if let Err(error) = write_report(dir, &report_name(&state.settings, count), &report) {
         // The hook cannot return an error; the log is the only place left.
-        state.settings.log.error(
-            "crash report could not be written",
-            &[("error", Val::Str(&error.to_string()))],
-        );
+        report_failure(&state.settings.log, &error.to_string());
     }
 }
 
@@ -190,6 +187,26 @@ fn log_panic(log: &LogSlot, message: &str, location: &str, thread_name: &str) {
     if spawned.is_ok() {
         // A timeout means the logger is stuck; the report is still written.
         let _flushed = finished.recv_timeout(FLUSH_BOUND);
+    }
+}
+
+/// Logs that the crash report could not be written, on a helper thread
+/// with the same bound as the panic line: if the panic happened inside a
+/// log sink, logging on this thread would wait forever.
+fn report_failure(log: &LogSlot, error: &str) {
+    let (log, error) = (log.clone(), error.to_owned());
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let spawned = thread::Builder::new()
+        .name("system-suite-crash-log".to_owned())
+        .spawn(move || {
+            log.error(
+                "crash report could not be written",
+                &[("error", Val::Str(&error))],
+            );
+            let _delivered = done.send(());
+        });
+    if spawned.is_ok() {
+        let _logged = finished.recv_timeout(std::time::Duration::from_secs(1));
     }
 }
 
