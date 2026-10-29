@@ -4,7 +4,9 @@
 //! ```text
 //! cargo bench --bench boot                     # measure and print
 //! SYSTEM_SUITE_BENCH_BASELINE=benches/baseline/linux-x86_64.txt cargo bench --bench boot
-//!                                              # also fail when a time is over 105% of the baseline
+//!                                              # also fail when a time is over 105% of the
+//!                                              # baseline and over the noise floor (1 ns for
+//!                                              # one operation, 20 us for a boot or a stop)
 //! SYSTEM_SUITE_BENCH_WRITE=benches/baseline/linux-x86_64.txt cargo bench --bench boot
 //!                                              # store the numbers as the new baseline
 //! ```
@@ -310,7 +312,7 @@ fn main() -> ExitCode {
     if let Ok(path) = env::var("SYSTEM_SUITE_BENCH_WRITE") {
         let mut out = String::from("# system-suite boot benchmark baseline: measure<TAB>median\n");
         for m in &measures {
-            out.push_str(&format!("{}\t{:.1}\n", m.name, m.median));
+            out.push_str(&format!("{}\t{:.3}\n", m.name, m.median));
         }
         fs::write(&path, out).expect("write baseline");
         println!("baseline written to {path}");
@@ -321,8 +323,10 @@ fn main() -> ExitCode {
         let baseline = read_baseline(Path::new(&path));
         for m in measures.iter().filter(|m| m.gated) {
             if let Some(base) = baseline.get(m.name) {
-                let limit = base * 1.05;
-                if m.median > limit {
+                // Over 105% of the baseline and over the run-to-run noise
+                // floor: 1 ns for one operation, 20 us for a boot or a stop.
+                let floor = if *base < 1_000.0 { 1.0 } else { 20_000.0 };
+                if m.median > base * 1.05 && m.median - base > floor {
                     println!(
                         "REGRESSION: {} median {:.1} {} > 105% of baseline {:.1}",
                         m.name, m.median, m.unit, base
