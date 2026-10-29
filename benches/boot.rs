@@ -9,10 +9,11 @@
 //!                                              # store the numbers as the new baseline
 //! ```
 //!
-//! Times are the median of many runs (p95 printed beside it). Idle CPU and
-//! the memory the suite adds are read from `/proc/self` on Linux; on other
-//! platforms they are reported as not measured until sys-lib's live
-//! readings are wired.
+//! Times are the median of many runs (p95 printed beside it). The heap a
+//! booted system holds is counted by a counting allocator (this binary
+//! only). Idle CPU and wake-ups are read from `/proc/self` on Linux; on
+//! other platforms they are not measured until sys-lib's live readings are
+//! wired.
 
 use std::{
     collections::BTreeMap,
@@ -25,7 +26,72 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::{thread, time::Duration};
 
+use std::{
+    alloc::{GlobalAlloc, Layout, System as SystemAlloc},
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
 use system_suite::{System, kernel::UrgentLine};
+
+/// Counts the bytes live on the heap, to measure what a running system
+/// holds. Benchmark-only: the library itself forbids `unsafe` (D-069).
+struct Counting;
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+// SAFETY: every method forwards to the system allocator with the same
+// arguments and only adds a relaxed counter update, so the allocator's
+// contract (size, alignment, ownership) is exactly the system one's.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded unchanged; the caller upholds `alloc`'s contract.
+        let ptr = unsafe { SystemAlloc.alloc(layout) };
+        if !ptr.is_null() {
+            let _ = LIVE.fetch_add(layout.size(), Ordering::Relaxed);
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: forwarded unchanged; `ptr` came from this allocator.
+        unsafe { SystemAlloc.dealloc(ptr, layout) };
+        let _ = LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: forwarded unchanged; the caller upholds `realloc`'s contract.
+        let new = unsafe { SystemAlloc.realloc(ptr, layout, new_size) };
+        if !new.is_null() {
+            let _ = LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+            let _ = LIVE.fetch_add(new_size, Ordering::Relaxed);
+        }
+        new
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+/// The heap a booted system holds (every platform): live bytes after a
+/// second boot, minus before it (the first warms up lazy statics).
+fn heap_added() -> Measure {
+    let dir = root("heap");
+    write_config(&dir);
+    let _warm = builder(&dir).start().expect("boot").shutdown();
+    let before = LIVE.load(Ordering::Relaxed);
+    let system = builder(&dir).start().expect("boot");
+    let after = LIVE.load(Ordering::Relaxed);
+    let _code = system.shutdown();
+    let _ = fs::remove_dir_all(&dir);
+    let kib = after.saturating_sub(before) as f64 / 1024.0;
+    Measure {
+        name: "heap held by a booted system",
+        median: kib,
+        p95: kib,
+        unit: "KiB",
+        gated: false,
+    }
+}
 
 /// One measured value: a time in nanoseconds, or a plain count.
 struct Measure {
@@ -173,20 +239,10 @@ fn idle_and_memory() -> Vec<Measure> {
         }
         total
     }
-    fn rss_kib() -> u64 {
-        let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
-        status
-            .lines()
-            .find_map(|l| l.strip_prefix("VmRSS:"))
-            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
-            .unwrap_or(0)
-    }
 
     let dir = root("idle");
     write_config(&dir);
-    let before = rss_kib();
     let system = builder(&dir).start().expect("boot");
-    let after = rss_kib();
     // Let start-up settle, then measure a quiet period.
     thread::sleep(Duration::from_millis(500));
     let (ticks, wakes) = (cpu_ticks(), switches());
@@ -242,8 +298,9 @@ fn read_baseline(path: &Path) -> BTreeMap<String, f64> {
 
 fn main() -> ExitCode {
     // `cargo bench` passes `--bench`; nothing else is accepted.
-    // Memory and idle first, before the repeated boots grow the heap.
-    let first = idle_and_memory();
+    // Heap and idle first, before the repeated boots.
+    let mut first = vec![heap_added()];
+    first.extend(idle_and_memory());
     let runs = 200;
     let (boot, stop) = boot_and_stop(runs);
     let mut measures = vec![boot, stop, urgent_check(), reader_get()];
