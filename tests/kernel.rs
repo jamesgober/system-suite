@@ -611,7 +611,9 @@ fn test_workers_restart_then_stop_at_shutdown() {
         })
         .unwrap();
     let began = Instant::now();
-    while (worker.restarts() < 2 || worker.state() != WorkerState::Running)
+    // The restart count rises at the second failure, a moment before the
+    // worker backs off; wait until the third run has actually started.
+    while (runs.load(Ordering::SeqCst) < 3 || worker.state() != WorkerState::Running)
         && began.elapsed() < Duration::from_secs(5)
     {
         thread::sleep(Duration::from_millis(5));
