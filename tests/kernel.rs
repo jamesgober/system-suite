@@ -1137,3 +1137,30 @@ fn test_a_replaced_or_shortened_audit_chain_is_refused_by_its_anchor() {
     let system = quiet("kernel-anchor", &root).start().unwrap();
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
+
+#[cfg(all(feature = "audit", unix))]
+#[test]
+fn test_t3_the_audit_chain_and_anchor_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("auditmode");
+    let system = quiet("kernel-auditmode", &root).start().unwrap();
+    let _id = system
+        .audit()
+        .record("a", "b", "c", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let chain = audit_file(&root, "kernel-auditmode");
+    let anchor = anchor_file(&root, "kernel-auditmode");
+    assert_eq!(mode(&chain), 0o600, "chain");
+    assert_eq!(mode(&anchor), 0o600, "anchor");
+    assert_eq!(mode(chain.parent().unwrap()) & 0o077, 0, "chain directory");
+    assert_eq!(
+        mode(anchor.parent().unwrap()) & 0o077,
+        0,
+        "anchor directory"
+    );
+}
