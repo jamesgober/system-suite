@@ -92,6 +92,15 @@ Exit: two weeks without an API change; every document checked against the build;
 - [ ] API frozen; `0.9.x` only fixes.
 - [ ] `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.
 
+## v0.9.x - Pre-1.0 polish (before any 1.0 release candidate)
+James's standing rule (2026-10-29, D-080): go back and fix every issue and tune the performance before getting close to release.
+Exit: nothing below is open without a recorded, hard reason; what is still open is listed in the 1.0 readiness note for James.
+- [ ] Every accepted gap, deferred item, known issue, and blocker revisited: the urgent line's memory watermark (sys-lib 0.4.0), the held features (`config-json`, `config-xml`, `config-validation`, `metrics-json`, `metrics-otlp`, `metrics-system`), idle CPU and wake-up readings on Windows and macOS (sys-lib 0.4), the documented limits of D-079, and every "Moved" line in this roadmap. Each one is fixed, or kept with its reason restated.
+- [ ] A fresh performance tuning pass: profile boot, stop, reload, and the request-path reads again on Linux, macOS, and Windows; act on what it finds; update `docs/PERFORMANCE.md` and the baselines.
+- [ ] The security and edge-case review run again over the whole suite (the 0.7 review's method), every finding fixed or recorded.
+- [ ] The same pass for each member release made for the suite (fix, tune, review before it is published).
+- [ ] The 1.0 readiness note for James: what is done, what is still open and why, and what 1.0 would promise.
+
 ## v1.0.0 - Stable
 Exit: the audit passes, the definition of done in `DIRECTIVES.md` holds, and James approves.
 - [ ] Every FR and NFR has a named, passing test; every threat has a passing attack test.
