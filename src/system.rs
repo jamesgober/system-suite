@@ -59,7 +59,7 @@ struct Shared {
     #[cfg(feature = "env")]
     env: env_lib::Env,
     #[cfg(feature = "config")]
-    config: crate::Snapshot<crate::config::Config>,
+    config: crate::SnapshotView<crate::config::Config>,
     #[cfg(feature = "log")]
     log: log_io::Logger,
     #[cfg(feature = "metrics")]
@@ -138,7 +138,7 @@ impl Foundation {
     /// [`Reader`](crate::Reader) that sees each reload at its next `get`.
     #[cfg(feature = "config")]
     #[must_use]
-    pub fn config_snapshot(&self) -> &crate::Snapshot<crate::config::Config> {
+    pub fn config_snapshot(&self) -> &crate::SnapshotView<crate::config::Config> {
         &self.shared.config
     }
 
@@ -266,14 +266,25 @@ impl System {
         let boot_ms = crate::boot::millis(parts.began.elapsed());
         #[cfg(feature = "signals")]
         if let Some(intake) = &parts.signals {
+            // Both run off the signal thread, so a slow dump or reload never
+            // holds up a stop signal behind it.
             let dump = foundation.clone();
-            intake.set_dump(Box::new(move || write_dump(&dump)));
+            intake.set_dump(Box::new(move || {
+                let dump = dump.clone();
+                let _spawned = std::thread::Builder::new()
+                    .name("system-suite-dump".to_owned())
+                    .spawn(move || write_dump(&dump));
+            }));
             #[cfg(feature = "config")]
             if let Some(reloader) = &parts.reloader {
                 let reloader = Arc::clone(reloader);
                 intake.set_reload(Box::new(move || {
-                    // The outcome is logged and counted by the reloader.
-                    drop(reloader.reload());
+                    let reloader = Arc::clone(&reloader);
+                    // The outcome is logged and counted by the reloader;
+                    // reloads are serialised inside it.
+                    let _spawned = std::thread::Builder::new()
+                        .name("system-suite-reload".to_owned())
+                        .spawn(move || drop(reloader.reload()));
                 }));
             }
         }
@@ -408,7 +419,7 @@ impl System {
     /// See [`Foundation::config_snapshot`].
     #[cfg(feature = "config")]
     #[must_use]
-    pub fn config_snapshot(&self) -> &crate::Snapshot<crate::config::Config> {
+    pub fn config_snapshot(&self) -> &crate::SnapshotView<crate::config::Config> {
         self.foundation.config_snapshot()
     }
 
@@ -663,7 +674,8 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
             #[cfg(feature = "config")]
             config: parts
                 .config
-                .clone()
+                .as_ref()
+                .map(crate::Snapshot::view)
                 .ok_or_else(|| missing("the configuration"))?,
             #[cfg(feature = "log")]
             log: parts.logger.clone().ok_or_else(|| missing("the logger"))?,

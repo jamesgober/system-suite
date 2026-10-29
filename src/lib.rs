@@ -33,7 +33,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! system-suite = { version = "0.6", default-features = false, features = ["sys"] }
+//! system-suite = { version = "0.7", default-features = false, features = ["sys"] }
 //! ```
 //!
 //! ```ignore
@@ -60,7 +60,9 @@
 //! `0.5`: feature complete. Configuration with secret references and
 //! two-phase reload, metrics, audit, kernel events, subsystems, the urgent
 //! line, supervised workers, timers, health, and Windows service control.
-//! `0.6` measured every performance target (`docs/PERFORMANCE.md`). The public API is in
+//! `0.6` measured every performance target (`docs/PERFORMANCE.md`). `0.7`
+//! hardened it: every threat has a passing attack test (`docs/SECURITY.md`).
+//! The public API is in
 //! `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in the
 //! [repository](https://github.com/jamesgober/system-suite)).
 
@@ -109,7 +111,7 @@ mod secrets;
 // Without `config` only the defaults exist, so some values are never built.
 #[cfg_attr(not(feature = "config"), allow(dead_code))]
 mod sections;
-#[cfg(any(feature = "env", feature = "config"))]
+#[cfg(any(feature = "env", feature = "config", feature = "audit"))]
 mod secure_file;
 #[cfg(any(feature = "log", feature = "signals", feature = "kernel"))]
 mod shutdown;
@@ -132,7 +134,7 @@ pub use crate::{
     builder::Builder,
     error::{Error, ErrorKind, Result},
     member::{Member, Step},
-    snapshot::{Reader, Snapshot},
+    snapshot::{Reader, Snapshot, SnapshotView},
     system::{Foundation, System},
 };
 

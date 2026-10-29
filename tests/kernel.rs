@@ -780,8 +780,11 @@ fn test_a_cut_audit_tail_fails_until_repair_is_allowed() {
         .unwrap();
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
     let path = audit_file(&root, "kernel-cut");
-    let bytes = fs::read(&path).unwrap();
-    fs::write(&path, &bytes[..bytes.len() - 5]).unwrap();
+    // A crash in the middle of a write: part of a record after the last
+    // complete (and anchored) one.
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.extend_from_slice(&[0, 0, 0, 90, 1, 2, 3, 4, 5]);
+    fs::write(&path, &bytes).unwrap();
 
     let error = quiet("kernel-cut", &root).start().err().unwrap();
     assert_eq!(error.kind(), ErrorKind::Audit);
@@ -799,6 +802,35 @@ fn test_a_cut_audit_tail_fails_until_repair_is_allowed() {
         .filter(|e| e.file_name().to_string_lossy().contains(".cut-"))
         .collect();
     assert_eq!(kept.len(), 1, "the cut bytes were not kept");
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_disabled_secrets_still_refuse_references() {
+    let root = Root::new("nosecrets");
+    let file = root.write_config("[db]\npassword = \"env:SYSTEM_SUITE_KERNEL_UNSET\"\n");
+    let error = quiet("kernel-nosecrets", &root)
+        .config_file(&file)
+        .disable(Member::Secrets)
+        .start()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::Secret, "{error}");
+}
+
+#[test]
+fn test_a_reload_with_a_bad_deadline_is_refused() {
+    let root = Root::new("baddeadline");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    let system = quiet("kernel-baddeadline", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    write_private(&file, "[kernel]\nshutdown_deadline = \"0s\"\n");
+    let error = system.reload().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::ConfigInvalid);
+    assert_eq!(system.config_snapshot().version(), 1);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
 
 #[cfg(feature = "audit")]
@@ -1087,4 +1119,92 @@ fn test_the_boot_timeline_lists_every_step_in_order() {
     assert!(steps.contains(&Step::Subsystems));
     assert_eq!(steps.last(), Some(&Step::Ready));
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+fn anchor_file(root: &Root, name: &str) -> PathBuf {
+    root.path()
+        .join("state")
+        .join("audit")
+        .join(format!("{name}.anchor"))
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_replaced_or_shortened_audit_chain_is_refused_by_its_anchor() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("anchor");
+    let system = quiet("kernel-anchor", &root).start().unwrap();
+    for target in ["user:1", "user:2"] {
+        let _id = system
+            .audit()
+            .record("admin:1", "user.delete", target, Outcome::Success)
+            .unwrap();
+    }
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let chain = audit_file(&root, "kernel-anchor");
+    let anchor = anchor_file(&root, "kernel-anchor");
+    assert!(anchor.is_file(), "no anchor at {}", anchor.display());
+
+    // Replacing the chain with an empty one verifies on its own; the
+    // anchor refuses it.
+    let original = fs::read(&chain).unwrap();
+    fs::remove_file(&chain).unwrap();
+    let error = quiet("kernel-anchor", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::AuditTampered);
+    assert!(error.to_string().contains("anchored"), "{error}");
+
+    // The original chain passes again.
+    fs::write(&chain, &original).unwrap();
+    let system = quiet("kernel-anchor", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+
+    // Moving both aside on purpose starts a new chain.
+    fs::remove_file(&chain).unwrap();
+    fs::remove_file(&anchor).unwrap();
+    let system = quiet("kernel-anchor", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(all(feature = "audit", unix))]
+#[test]
+fn test_t3_the_audit_chain_and_anchor_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("auditmode");
+    let system = quiet("kernel-auditmode", &root).start().unwrap();
+    let _id = system
+        .audit()
+        .record("a", "b", "c", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let chain = audit_file(&root, "kernel-auditmode");
+    let anchor = anchor_file(&root, "kernel-auditmode");
+    assert_eq!(mode(&chain), 0o600, "chain");
+    assert_eq!(mode(&anchor), 0o600, "anchor");
+    assert_eq!(mode(chain.parent().unwrap()) & 0o077, 0, "chain directory");
+    assert_eq!(
+        mode(anchor.parent().unwrap()) & 0o077,
+        0,
+        "anchor directory"
+    );
+}
+
+#[cfg(all(feature = "audit", unix))]
+#[test]
+fn test_t3_an_audit_chain_others_can_change_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = Root::new("auditloose");
+    let system = quiet("kernel-auditloose", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let chain = audit_file(&root, "kernel-auditloose");
+    fs::set_permissions(&chain, fs::Permissions::from_mode(0o620)).unwrap();
+    let error = quiet("kernel-auditloose", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::ConfigInsecure);
+    assert!(error.to_string().contains("audit chain"), "{error}");
 }

@@ -163,6 +163,13 @@ pub(crate) fn resolve(config: &Config, sources: &Sources<'_>) -> Result<Resolved
     collect(config.backend().as_value(), &mut Vec::new(), &mut found);
     let mut values = Vec::with_capacity(found.len());
     for (path, text) in found {
+        if let Some(list) = path.strip_suffix("[]") {
+            return Err(secret_error(
+                list,
+                "holds a secret reference inside a list",
+                "give each secret its own key",
+            ));
+        }
         match reference(&text) {
             Some(("env", name)) => {
                 values.push((path.clone(), Value::Raw(from_env(&path, name, sources)?)))
@@ -245,6 +252,9 @@ pub(crate) struct State {
     #[cfg(feature = "env")]
     env: Option<env_lib::Env>,
     tables: Mutex<Tables>,
+    /// Set at shutdown step 7: a table accepted after it is retired at
+    /// once, so no secret outlives the wipe.
+    closed: std::sync::atomic::AtomicBool,
 }
 
 /// The table in force and the one before it.
@@ -261,6 +271,7 @@ impl State {
             #[cfg(feature = "env")]
             env,
             tables: Mutex::new(Tables::default()),
+            closed: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -291,6 +302,12 @@ impl State {
     /// Makes `table` current; the table two versions back is retired.
     pub(crate) fn accept(&self, table: Arc<Table>) {
         let mut tables = self.tables.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.closed.load(std::sync::atomic::Ordering::Acquire) {
+            // A reload that finished after the shutdown wiped the vault.
+            drop(tables);
+            table.retire();
+            return;
+        }
         let retired = tables.previous.take();
         tables.previous = tables.current.take();
         tables.current = Some(table);
@@ -304,6 +321,8 @@ impl State {
     pub(crate) fn wipe(&self) {
         let (current, previous) = {
             let mut tables = self.tables.lock().unwrap_or_else(PoisonError::into_inner);
+            self.closed
+                .store(true, std::sync::atomic::Ordering::Release);
             (tables.current.take(), tables.previous.take())
         };
         for table in [current, previous].into_iter().flatten() {
@@ -343,8 +362,14 @@ fn collect(value: &config_lib::Value, path: &mut Vec<String>, out: &mut Vec<(Str
             }
         }
         config_lib::Value::Array(items) => {
+            // Elements share the list's key; a reference inside a list is
+            // refused in `resolve` (it would have no name of its own).
             for item in items {
-                collect(item, path, out);
+                if let config_lib::Value::String(text) = item
+                    && reference(text).is_some()
+                {
+                    out.push((format!("{}[]", path.join(".")), text.clone()));
+                }
             }
         }
         _ => {}
@@ -393,7 +418,13 @@ fn from_file(path: &str, file: &Path) -> Result<RawKey, Error> {
         )
     })?;
     crate::secure_file::check_secret_open(&opened, file, path)?;
-    let mut bytes = Vec::new();
+    // Sized up front (within the limit), so growing the buffer leaves no
+    // partial copies of the secret in freed memory.
+    let size = opened
+        .metadata()
+        .map(|m| m.len().min(MAX_SECRET_FILE + 1))
+        .unwrap_or(MAX_SECRET_FILE + 1);
+    let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0).saturating_add(1));
     let read = opened
         .take(MAX_SECRET_FILE + 1)
         .read_to_end(&mut bytes)
@@ -476,6 +507,25 @@ mod tests {
         ] {
             assert!(!marks_secret(key), "{key}");
         }
+    }
+
+    #[test]
+    fn test_a_reference_inside_a_list_is_refused() {
+        let vault = key_vault::KeyVaultBuilder::new().build();
+        let sources = Sources {
+            vault: &vault,
+            #[cfg(feature = "env")]
+            env: None,
+            allow_plain: true,
+        };
+        let config = Config::from_text("[db]\nhosts = [\"a\", \"env:DB_PASS\"]\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let error = resolve(&config, &sources).err();
+        assert_eq!(error.as_ref().map(Error::kind), Some(ErrorKind::Secret));
+        assert!(error.is_some_and(|e| e.to_string().contains("db.hosts")));
+        let plain =
+            Config::from_text("[db]\nhosts = [\"a\", \"b\"]\n").unwrap_or_else(|e| panic!("{e}"));
+        assert!(resolve(&plain, &sources).is_ok());
     }
 
     #[test]
