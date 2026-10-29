@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "system-suite"
-version = "0.6.0"
+version = "0.7.0"
 
 # Minimum Supported Rust Version (MSRV)
 # 1.89: the highest MSRV among the members (sys-lib needs `File::lock` and

@@ -13,6 +13,56 @@
 
 ---
 
+## [0.7.0] - 2026-10-29
+
+Hardening: every threat has a passing attack test, and a security review
+of the whole suite is closed.
+
+### Added
+
+- The audit chain's tail is anchored outside the chain file
+  (`<state dir>/audit/<name>.anchor`, owner-only, rewritten after every
+  sync): a chain cut short or replaced is refused with `AuditTampered`.
+- `SnapshotView` and `Snapshot::view`: a read-only handle (load, version,
+  readers, no publish).
+- `docs/SECURITY.md`: every threat, its defence, its cost, its attack
+  test, and the known limits.
+- Attack tests: T3 for the audit chain and its anchor, T5 for a
+  panicking worker, T8 with a real SIGTERM while a subsystem starts.
+- An 8-hour soak test (`tests/soak.rs`, ignored by default) of start,
+  reload, and stop cycles.
+
+### Changed
+
+- `config_snapshot()` returns `&SnapshotView<Config>` instead of
+  `&Snapshot<Config>`: only a reload, validated, replaces the
+  configuration. Code that called `.reader()`, `.load()`, or `.version()`
+  is unchanged; code that called `.publish()` no longer compiles, as
+  intended.
+- The `.env` file is read by the suite and checked on the opened file
+  (regular file only, at most 1 MiB).
+- Reloads and dumps run on their own threads, not the signal thread.
+
+### Fixed
+
+- A panicking signal handler no longer ends the signal intake.
+- A reload cancels when a stop arrives while subsystems prepare; a
+  panicking commit no longer leaves the rest uncommitted.
+- A reload cannot set a zero or over-long shutdown deadline; an
+  `[ids] epoch` in the future is refused.
+- A secret reference inside a list, or under a disabled secrets member,
+  is refused instead of read as a literal.
+- Secrets from a reload that finished after the shutdown wiped the vault
+  are removed at once.
+- The configuration and `.env` files must be regular files (a FIFO no
+  longer blocks the boot); an existing audit chain another user can
+  change is refused.
+- The crash hook syncs the audit chain; the crash report's write error is
+  logged within a bound.
+- `status()` no longer holds the subsystem list while health checks run;
+  a stopped worker's name can be used again; a timer thread that misses
+  the deadline is reported as late.
+
 ## [0.6.0] - 2026-10-29
 
 Optimisation: every performance target measured and published, all met.
@@ -282,7 +332,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jamesgober/system-suite/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jamesgober/system-suite/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jamesgober/system-suite/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/system-suite/compare/v0.3.0...v0.4.0
