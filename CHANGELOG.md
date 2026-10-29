@@ -13,6 +13,26 @@
 
 ---
 
+## [0.6.0] - 2026-10-29
+
+Optimisation: every performance target measured and published, all met.
+
+### Added
+
+- `benches/boot.rs`: the boot benchmark harness (standard library only):
+  boot to ready, stop to exit, the urgent-line check, an unchanged
+  snapshot read, the heap a booted system holds, and on Linux idle CPU
+  and wake-ups. Baselines per OS in `benches/baseline/`, and a regression
+  gate (over 105% and over a noise floor).
+- `System::boot_timeline()`: every boot step that ran, with its duration
+  (steps 16 and 17 included).
+- `docs/PERFORMANCE.md`.
+- CI runs the benchmark on every push.
+
+### Moved
+
+- The memory watermark ships in the release after sys-lib 0.4.0.
+
 ## [0.5.0] - 2026-10-28
 
 Feature complete: every member wired, secrets resolved into a vault, a
@@ -262,7 +282,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jamesgober/system-suite/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jamesgober/system-suite/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/system-suite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/system-suite/compare/v0.2.0...v0.3.0

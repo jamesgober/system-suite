@@ -94,11 +94,11 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
 
 ```toml
 [dependencies]
-system-suite = "0.5"
+system-suite = "0.6"
 
 [build-dependencies]
 # Only for build info (the build commit, time, and profile in the first log line).
-system-suite = { version = "0.5", default-features = false, features = ["sys"] }
+system-suite = { version = "0.6", default-features = false, features = ["sys"] }
 ```
 
 ```rust,ignore
@@ -524,6 +524,7 @@ impl System {
     pub fn run(self) -> ExitCode;                    // Tier 1, above
     pub fn wait_for_stop(&self) -> lifecycle::StopReason;
     pub fn shutdown(self) -> ExitCode;
+    pub fn boot_timeline(&self) -> &[(Step, Duration)];   // 0.6: every step that ran, with its duration (D-070)
 }
 ```
 

@@ -1,0 +1,8 @@
+# system-suite boot benchmark baseline: measure<TAB>median
+boot to ready	77562.000
+stop to exit	161040.000
+urgent-line check	0.204
+snapshot read, unchanged	0.346
+heap held by a booted system	98.331
+idle CPU ticks in 5 s	0.000
+idle wake-ups in 5 s	0.000

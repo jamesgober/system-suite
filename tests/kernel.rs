@@ -611,7 +611,9 @@ fn test_workers_restart_then_stop_at_shutdown() {
         })
         .unwrap();
     let began = Instant::now();
-    while (worker.restarts() < 2 || worker.state() != WorkerState::Running)
+    // The restart count rises at the second failure, a moment before the
+    // worker backs off; wait until the third run has actually started.
+    while (runs.load(Ordering::SeqCst) < 3 || worker.state() != WorkerState::Running)
         && began.elapsed() < Duration::from_secs(5)
     {
         thread::sleep(Duration::from_millis(5));
@@ -1063,5 +1065,26 @@ fn test_t2_a_reload_resolves_again_and_an_older_secret_keeps_its_value() {
         Some(ErrorKind::Secret)
     );
     assert_eq!(secret_text(&system, "db.password"), "second");
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[test]
+fn test_the_boot_timeline_lists_every_step_in_order() {
+    let root = Root::new("timeline");
+    let journal = Journal::default();
+    let system = quiet("kernel-timeline", &root)
+        .register(Recorder::new("store", Position::FIRST, &journal))
+        .start()
+        .unwrap();
+    let steps: Vec<Step> = system
+        .boot_timeline()
+        .iter()
+        .map(|(step, _)| *step)
+        .collect();
+    assert_eq!(steps.first(), Some(&Step::BuildInfo));
+    assert!(steps.windows(2).all(|pair| pair[0] < pair[1]), "{steps:?}");
+    assert!(steps.contains(&Step::Configuration));
+    assert!(steps.contains(&Step::Subsystems));
+    assert_eq!(steps.last(), Some(&Step::Ready));
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }

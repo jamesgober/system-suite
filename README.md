@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: feature complete (<code>0.5.0</code>).</strong> A service boots with one call, reads its configuration (secrets as references resolved into a page-locked vault; reloaded all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, keeps a tamper-evident audit chain, reports health, and stops in order on a signal or a Windows service stop within a deadline. Measured performance arrives in <code>0.6.0</code>. The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: measured (<code>0.6.0</code>).</strong> Boot in well under a millisecond, stop in about 0.2 ms, under 100 KiB of heap, no idle CPU (<a href="./docs/PERFORMANCE.md">measured</a>). A service boots with one call, reads its configuration (secrets as references resolved into a page-locked vault; reloaded all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, keeps a tamper-evident audit chain, reports health, and stops in order on a signal or a Windows service stop within a deadline. Hardening arrives in <code>0.7.0</code>. The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -40,11 +40,11 @@
 
 ```toml
 [dependencies]
-system-suite = "0.5"
+system-suite = "0.6"
 
 [build-dependencies]
 # Optional: the build commit and time in the first log line.
-system-suite = { version = "0.5", default-features = false, features = ["sys"] }
+system-suite = { version = "0.6", default-features = false, features = ["sys"] }
 ```
 
 ```rust

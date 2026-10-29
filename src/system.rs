@@ -426,6 +426,31 @@ impl System {
         self.foundation.runtime()
     }
 
+    /// How long each boot step took, in boot order: the steps that ran
+    /// (a step whose feature is compiled out is absent). Also written to
+    /// the log as one `boot step` line each.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use system_suite::{Member, Step, System};
+    ///
+    /// let builder = System::builder("timeline-doc")
+    ///     .process_wide(false)
+    ///     .disable(Member::Log);
+    /// # #[cfg(feature = "sys")]
+    /// # let builder = builder.single_instance(false);
+    /// let system = builder.start()?;
+    /// let total: std::time::Duration = system.boot_timeline().iter().map(|(_, took)| *took).sum();
+    /// assert_eq!(system.boot_timeline().first().map(|(step, _)| *step), Some(Step::BuildInfo));
+    /// # let _ = (total, system.shutdown());
+    /// # Ok::<(), system_suite::Error>(())
+    /// ```
+    #[must_use]
+    pub fn boot_timeline(&self) -> &[(crate::Step, std::time::Duration)] {
+        self.parts.timeline()
+    }
+
     /// The current lifecycle phase.
     #[cfg(feature = "kernel")]
     #[must_use]
