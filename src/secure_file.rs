@@ -17,7 +17,10 @@ use crate::{Error, ErrorKind};
 /// defence idea, D-049). Windows files are governed by their directory's
 /// access control list, which this check does not read.
 #[cfg(unix)]
-#[cfg_attr(not(any(feature = "config", feature = "env", feature = "audit")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "config", feature = "env", feature = "audit")),
+    allow(dead_code)
+)]
 pub(crate) fn check_open(file: &fs::File, path: &Path, what: &str) -> Result<(), Error> {
     let metadata = file.metadata().map_err(|e| uninspectable(path, what, &e))?;
     check_metadata(&metadata, path, what)
@@ -136,7 +139,10 @@ pub(crate) fn check_secret_open(
 }
 
 #[cfg(not(unix))]
-#[cfg_attr(not(any(feature = "config", feature = "env", feature = "audit")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "config", feature = "env", feature = "audit")),
+    allow(dead_code)
+)]
 pub(crate) fn check_open(_file: &std::fs::File, _path: &Path, _what: &str) -> Result<(), Error> {
     Ok(())
 }
