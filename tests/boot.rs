@@ -53,6 +53,8 @@ fn child() {
         "reload-watch" => reload_watch(&root),
         #[cfg(feature = "log-bridge")]
         "log-bridge" => log_bridge(&root),
+        #[cfg(feature = "globals")]
+        "globals" => globals(&root),
         other => panic!("unknown scenario {other}"),
     };
     std::process::exit(i32::from(code));
@@ -157,6 +159,29 @@ fn log_bridge(_root: &Path) -> u8 {
         }
         Err(error) => report(&error),
     }
+}
+
+/// Checks that `foundation()` is published while the system runs and
+/// withdrawn when it stops.
+#[cfg(feature = "globals")]
+fn globals(_root: &Path) -> u8 {
+    assert!(
+        system_suite::foundation().is_none(),
+        "published before boot"
+    );
+    let system = match System::builder(&name()).start() {
+        Ok(system) => system,
+        Err(error) => return report(&error),
+    };
+    let published = system_suite::foundation().map(|f| f.name().to_owned());
+    assert_eq!(published.as_deref(), Some(name().as_str()));
+    let _code = system.shutdown();
+    assert!(
+        system_suite::foundation().is_none(),
+        "still published after shutdown"
+    );
+    println!("GLOBALS OK");
+    0
 }
 
 fn exit_value(kind: ErrorKind) -> u8 {
@@ -482,6 +507,15 @@ fn test_log_facade_records_reach_the_systems_log() {
     assert!(log.contains("a record from the log facade"), "{log}");
 }
 
+#[cfg(feature = "globals")]
+#[test]
+fn test_foundation_is_published_while_running() {
+    let scenario = Scenario::new("it-globals");
+    let output = scenario.run("globals");
+    assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
+    assert!(text(&output.stdout).contains("GLOBALS OK"));
+}
+
 #[cfg(windows)]
 #[test]
 fn test_ctrl_break_stops_with_zero() {
@@ -802,13 +836,13 @@ fn test_t4_configuration_step_fails_on_an_invalid_file() {
     for content in [
         "[log\nlevel = \"info\"\n",
         "[log]\nlevel = \"loud\"\n",
-        "[db]\npassword = \"file:/run/secrets/db\"\n",
+        "[db]\nhost = \"hunter2-host\"\n[secrets]\nallow_plain = \"maybe\"\n",
     ] {
         write_private(&file, content);
         let output = scenario.run("boot");
         assert_boot_fails(&output, "step 5 (configuration)", exit::CONFIG);
         assert!(
-            !text(&output.stderr).contains("/run/secrets/db"),
+            !text(&output.stderr).contains("hunter2"),
             "{}",
             text(&output.stderr)
         );
@@ -817,6 +851,24 @@ fn test_t4_configuration_step_fails_on_an_invalid_file() {
         !scenario.dir("runtime").exists(),
         "the guard ran after a failed step"
     );
+}
+
+/// Without the secrets feature a reference is refused at step 5; with it,
+/// a reference that cannot be resolved stops the boot at step 8.
+#[test]
+fn test_t4_an_unresolvable_secret_reference_stops_the_boot() {
+    let scenario = Scenario::new("it-secretref");
+    write_private(
+        &scenario.dir("config").join("it-secretref.conf"),
+        "[db]\npassword = \"env:SYSTEM_SUITE_IT_NEVER_SET\"\n",
+    );
+    let output = scenario.run("boot");
+    let step = if cfg!(feature = "secrets") {
+        "step 8 (secrets)"
+    } else {
+        "step 5 (configuration)"
+    };
+    assert_boot_fails(&output, step, exit::CONFIG);
 }
 
 #[cfg(unix)]

@@ -374,7 +374,14 @@ fn test_configuration_failures_stop_the_boot_at_step_5() {
             .err()
             .unwrap();
         assert_eq!(error.kind(), kind, "{text}");
-        assert_eq!(error.step(), Some(Step::Configuration), "{text}");
+        // With the secrets feature a reference is resolved (and here fails)
+        // at step 8; without it, it is refused at step 5.
+        let step = if kind == ErrorKind::Secret && cfg!(feature = "secrets") {
+            Step::Secrets
+        } else {
+            Step::Configuration
+        };
+        assert_eq!(error.step(), Some(step), "{text}");
     }
     let error = quiet("kernel-step5", &root)
         .config_file(root.path().join("missing.conf"))
@@ -692,5 +699,369 @@ limit = 2
     };
     assert_eq!(reloads("refused"), 1);
     assert_eq!(reloads("accepted"), 1);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+// ---------------------------------------------------------------------------
+// Audit (boot step 13)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "audit")]
+fn audit_file(root: &Root, name: &str) -> PathBuf {
+    root.path()
+        .join("data")
+        .join("audit")
+        .join(format!("{name}.audit"))
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_audit_records_persist_and_resume_across_boots() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("audit");
+    let system = quiet("kernel-audit", &root).start().unwrap();
+    let first = system
+        .audit()
+        .record("admin:1", "user.delete", "user:9", Outcome::Success)
+        .unwrap();
+    assert_eq!(first.as_u64(), 0);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let path = audit_file(&root, "kernel-audit");
+    assert!(path.is_file());
+
+    // The second boot verifies the chain and appends after it; the first
+    // boot's shutdown recorded the stop.
+    let system = quiet("kernel-audit", &root).start().unwrap();
+    let next = system
+        .audit()
+        .record("admin:1", "user.create", "user:10", Outcome::Success)
+        .unwrap();
+    assert!(next.as_u64() >= 2, "{next:?}");
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_changed_audit_record_stops_the_boot_as_tampered() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("tamper");
+    let system = quiet("kernel-tamper", &root).start().unwrap();
+    let _id = system
+        .audit()
+        .record("admin:1", "role.grant", "user:42", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let path = audit_file(&root, "kernel-tamper");
+    let mut bytes = fs::read(&path).unwrap();
+    let at = bytes.windows(7).position(|w| w == b"user:42").unwrap();
+    bytes[at + 6] = b'3';
+    fs::write(&path, &bytes).unwrap();
+
+    let error = quiet("kernel-tamper", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::AuditTampered);
+    assert_eq!(error.step(), Some(Step::Audit));
+    assert_eq!(fs::read(&path).unwrap(), bytes, "the evidence was changed");
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_cut_audit_tail_fails_until_repair_is_allowed() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("cut");
+    let system = quiet("kernel-cut", &root).start().unwrap();
+    let _id = system
+        .audit()
+        .record("admin:1", "key.rotate", "key:a", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let path = audit_file(&root, "kernel-cut");
+    let bytes = fs::read(&path).unwrap();
+    fs::write(&path, &bytes[..bytes.len() - 5]).unwrap();
+
+    let error = quiet("kernel-cut", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::Audit);
+    assert!(error.action().contains("repair_tail"), "{}", error.action());
+
+    let system = quiet("kernel-cut", &root)
+        .config_str("[audit]\nrepair_tail = true\n")
+        .start()
+        .unwrap();
+    assert!(system.audit().is_enabled());
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let kept: Vec<_> = fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().contains(".cut-"))
+        .collect();
+    assert_eq!(kept.len(), 1, "the cut bytes were not kept");
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_disabled_audit_refuses_records() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("noaudit");
+    let system = quiet("kernel-noaudit", &root)
+        .disable(Member::Audit)
+        .start()
+        .unwrap();
+    assert!(!system.audit().is_enabled());
+    let error = system
+        .audit()
+        .record("a", "b", "c", Outcome::Success)
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::Disabled);
+    assert!(!audit_file(&root, "kernel-noaudit").exists());
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_reloads_and_lockdowns_are_audited() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("auditkernel");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    let system = quiet("kernel-auditk", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    let before = system.audit().next_id().unwrap().as_u64();
+    assert_eq!(system.reload().unwrap(), 2);
+    system
+        .kernel()
+        .urgent()
+        .set(system_suite::kernel::Level::Lockdown, "intrusion suspected")
+        .unwrap();
+    let after = system.audit().next_id().unwrap().as_u64();
+    assert_eq!(after, before + 2);
+    let _id = system
+        .audit()
+        .record("t", "t", "t", Outcome::Success)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let text = String::from_utf8_lossy(&fs::read(audit_file(&root, "kernel-auditk")).unwrap())
+        .into_owned();
+    for needle in [
+        "config.reload",
+        "urgent.lockdown",
+        "intrusion suspected",
+        "stop",
+    ] {
+        assert!(text.contains(needle), "missing {needle}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Events (boot step 14)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "registry")]
+#[test]
+fn test_events_reach_handlers_and_a_panicking_handler_is_isolated() {
+    use system_suite::kernel::Event;
+
+    let root = Root::new("events");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    let journal = Journal::default();
+    let system = quiet("kernel-events", &root)
+        .config_file(&file)
+        .register(Recorder::new("store", Position::FIRST, &journal))
+        .start()
+        .unwrap();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&seen);
+    let _guard = system.events().register_guard(move |event: &Event| {
+        let line = match event {
+            Event::Phase { to, .. } => format!("phase {to}"),
+            Event::Reloaded { version } => format!("reloaded {version}"),
+            Event::ReloadRefused { by, .. } => format!("refused by {by}"),
+            Event::SubsystemStopped {
+                name, met_deadline, ..
+            } => {
+                format!("stopped {name} {met_deadline}")
+            }
+            Event::Urgent { notice } => format!("urgent {}", notice.level),
+            other => format!("{other:?}"),
+        };
+        sink.lock().unwrap().push(line);
+    });
+    let _boom = system
+        .events()
+        .register_guard(|_event: &Event| panic!("a handler that always panics"));
+
+    assert_eq!(system.reload().unwrap(), 2);
+    write_private(&file, "[app\n");
+    assert!(system.reload().is_err());
+    system
+        .kernel()
+        .urgent()
+        .set(system_suite::kernel::Level::Shed, "test")
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+
+    let seen = seen.lock().unwrap().clone();
+    for want in [
+        "reloaded 2",
+        "refused by configuration",
+        "urgent shed",
+        "phase draining",
+        "stopped store true",
+        "phase stopping",
+    ] {
+        assert!(
+            seen.iter().any(|line| line == want),
+            "missing {want} in {seen:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Secrets (boot step 8, threat T2)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "secrets")]
+fn secret_text(system: &System, key: &str) -> String {
+    let secret = system.config().secret(key).unwrap();
+    secret
+        .with(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap()
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_references_resolve_from_env_file_and_vault() {
+    let root = Root::new("secrets");
+    fs::create_dir_all(root.path().join("config")).unwrap();
+    write_private(
+        &root.path().join("config").join(".env"),
+        "KERNEL_SECRET_DB=from-the-env-file\n",
+    );
+    let secret_file = root.path().join("api.secret");
+    write_private(&secret_file, "from-a-file\n");
+    let config = format!(
+        "[db]\npassword = \"env:KERNEL_SECRET_DB\"\n[api]\ntoken = \"file:{}\"\n[hsm]\nkey = \"vault:hsm-key\"\n",
+        secret_file.display().to_string().replace('\\', "/")
+    );
+    let system = quiet("kernel-secrets", &root)
+        .config_str(&config)
+        .on_vault(|vault| {
+            let _handle = vault.register(
+                "hsm-key",
+                system_suite::vault::RawKey::new(b"from-the-hsm".to_vec()),
+            )?;
+            Ok(())
+        })
+        .start()
+        .unwrap();
+    assert_eq!(secret_text(&system, "db.password"), "from-the-env-file");
+    assert_eq!(secret_text(&system, "api.token"), "from-a-file");
+    assert_eq!(secret_text(&system, "hsm.key"), "from-the-hsm");
+    let secret = system.config().secret("db.password").unwrap();
+    let shown = format!("{secret:?}");
+    assert!(!shown.contains("from-the"), "{shown}");
+    assert_eq!(
+        system.config().secret("db.host").err().map(|e| e.kind()),
+        Some(ErrorKind::Secret)
+    );
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    // Shutdown step 7 removed the configuration's secrets from the vault.
+    assert!(secret.with(|bytes| bytes.len()).is_err());
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_unresolvable_references_name_the_key_never_a_value() {
+    let root = Root::new("badrefs");
+    let cases = [
+        "[db]\npassword = \"env:KERNEL_NEVER_SET_ANYWHERE\"\n",
+        "[db]\npassword = \"file:/definitely/not/here\"\n",
+        "[db]\npassword = \"file:relative/path\"\n",
+        "[db]\npassword = \"vault:unregistered\"\n",
+    ];
+    for text in cases {
+        let error = quiet("kernel-badrefs", &root)
+            .config_str(text)
+            .start()
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), ErrorKind::Secret, "{text}");
+        assert_eq!(error.step(), Some(Step::Secrets), "{text}");
+        assert!(error.to_string().contains("db.password"), "{error}");
+    }
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_plain_secrets_are_refused_unless_allowed() {
+    let root = Root::new("plain");
+    for key in ["password", "api_token", "client_secret"] {
+        let text = format!("[db]\n{key} = \"hunter2\"\n");
+        let error = quiet("kernel-plain", &root)
+            .config_str(&text)
+            .start()
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), ErrorKind::PlainSecret, "{key}");
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+    }
+    let system = quiet("kernel-plain", &root)
+        .config_str("[db]\npassword = \"hunter2\"\n[secrets]\nallow_plain = true\n")
+        .start()
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(all(feature = "secrets", unix))]
+#[test]
+fn test_t2_a_secret_file_others_can_read_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = Root::new("loosefile");
+    let secret_file = root.path().join("db.secret");
+    write_private(&secret_file, "hunter2");
+    fs::set_permissions(&secret_file, fs::Permissions::from_mode(0o640)).unwrap();
+    let error = quiet("kernel-loose", &root)
+        .config_str(format!(
+            "[db]\npassword = \"file:{}\"\n",
+            secret_file.display()
+        ))
+        .start()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::Secret);
+    assert!(error.action().contains("chmod 600"), "{}", error.action());
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn test_t2_a_reload_resolves_again_and_an_older_secret_keeps_its_value() {
+    let root = Root::new("reloadsecret");
+    let secret_file = root.path().join("db.secret");
+    write_private(&secret_file, "first");
+    let reference = secret_file.display().to_string().replace('\\', "/");
+    let file = root.write_config(&format!("[db]\npassword = \"file:{reference}\"\n"));
+    let system = quiet("kernel-reloadsecret", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    let before = system.config().secret("db.password").unwrap();
+    write_private(&secret_file, "second");
+    assert_eq!(system.reload().unwrap(), 2);
+    assert_eq!(secret_text(&system, "db.password"), "second");
+    assert_eq!(before.with(<[u8]>::to_vec).unwrap(), b"first");
+
+    // A reload that fails to resolve changes nothing.
+    fs::remove_file(&secret_file).unwrap();
+    assert_eq!(
+        system.reload().err().map(|e| e.kind()),
+        Some(ErrorKind::Secret)
+    );
+    assert_eq!(secret_text(&system, "db.password"), "second");
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }

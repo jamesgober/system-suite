@@ -26,6 +26,8 @@ use crate::{
 };
 
 pub(crate) mod crash;
+#[cfg(feature = "registry")]
+mod events;
 mod health;
 pub(crate) mod metrics;
 pub(crate) mod notify;
@@ -33,6 +35,8 @@ pub(crate) mod notify;
 pub(crate) mod signals;
 mod urgent;
 
+#[cfg(feature = "registry")]
+pub use events::Event;
 pub use health::{Component, ComponentHealth, Health, HealthReport, Status};
 pub use urgent::{Level, Notice, UrgentLine, Watch};
 
@@ -79,6 +83,10 @@ struct Control {
     members: OnceLock<Vec<Member>>,
     log: OnceLock<LogSlot>,
     metrics: OnceLock<metrics::KernelMetrics>,
+    #[cfg(feature = "audit")]
+    audit: OnceLock<crate::AuditLog>,
+    #[cfg(feature = "registry")]
+    events: OnceLock<Arc<registry_io::SyncRegistry<Event>>>,
 }
 
 /// A started subsystem, as the kernel holds it.
@@ -127,6 +135,10 @@ impl Kernel {
                 members: OnceLock::new(),
                 log: OnceLock::new(),
                 metrics: OnceLock::new(),
+                #[cfg(feature = "audit")]
+                audit: OnceLock::new(),
+                #[cfg(feature = "registry")]
+                events: OnceLock::new(),
             }),
         }
     }
@@ -138,7 +150,33 @@ impl Kernel {
     }
 
     pub(crate) fn set_phase(&self, phase: Phase) {
-        self.control.phase.store(phase as u8, Ordering::Release);
+        let before = self.control.phase.swap(phase as u8, Ordering::AcqRel);
+        #[cfg(feature = "registry")]
+        if before != phase as u8 {
+            self.emit(|| Event::Phase {
+                from: Phase::from_u8(before),
+                to: phase,
+            });
+        }
+        #[cfg(not(feature = "registry"))]
+        let _before = before;
+    }
+
+    /// Connects the kernel to the event registry (boot step 14).
+    #[cfg(feature = "registry")]
+    pub(crate) fn set_events(&self, events: Arc<registry_io::SyncRegistry<Event>>) {
+        let _first = self.control.events.set(events).is_ok();
+    }
+
+    /// Delivers an event to the registered callbacks, when the registry
+    /// is connected. The event is only built when someone can receive it.
+    #[cfg(feature = "registry")]
+    pub(crate) fn emit(&self, event: impl FnOnce() -> Event) {
+        if let Some(events) = self.control.events.get()
+            && !events.is_empty()
+        {
+            events.notify(&event());
+        }
     }
 
     /// Asks for a clean stop, exactly as a SIGTERM would. Returns `false`
@@ -301,6 +339,10 @@ impl Kernel {
         let _first = self.control.metrics.set(metrics.clone()).is_ok();
         let urgent_log = log.clone();
         let urgent_metrics = metrics.clone();
+        #[cfg(feature = "audit")]
+        let urgent_audit = self.control.audit.get().cloned();
+        #[cfg(feature = "registry")]
+        let urgent_events = Arc::downgrade(&self.control);
         self.control.urgent.observe(Box::new(move |notice| {
             urgent_log.warn(
                 "urgent line changed",
@@ -311,6 +353,23 @@ impl Kernel {
                 ],
             );
             urgent_metrics.urgent(notice.level);
+            #[cfg(feature = "registry")]
+            if let Some(control) = urgent_events.upgrade() {
+                Kernel { control }.emit(|| Event::Urgent { notice });
+            }
+            // A lockdown is a privileged action: it goes on the record.
+            #[cfg(feature = "audit")]
+            if notice.level == Level::Lockdown
+                && let Some(audit) = &urgent_audit
+                && audit.is_enabled()
+            {
+                let _recorded = audit.record(
+                    "kernel",
+                    "urgent.lockdown",
+                    notice.reason,
+                    audit_trail::Outcome::Success,
+                );
+            }
         }));
         let weak = Arc::downgrade(&self.control);
         self.control
@@ -330,6 +389,13 @@ impl Kernel {
                         ],
                     );
                     metrics.worker_restarted(&name);
+                    #[cfg(feature = "registry")]
+                    if let Some(control) = weak.upgrade() {
+                        Kernel { control }.emit(|| Event::WorkerRestarted {
+                            name: name.clone(),
+                            restarts,
+                        });
+                    }
                 }
                 crate::runtime::Event::WorkerFailed {
                     name,
@@ -341,6 +407,10 @@ impl Kernel {
                         &[("worker", Val::Str(&name)), ("reason", Val::Str(&reason))],
                     );
                     metrics.worker_failed(&name);
+                    #[cfg(feature = "registry")]
+                    if let Some(control) = weak.upgrade() {
+                        Kernel { control }.emit(|| Event::WorkerFailed { name: name.clone() });
+                    }
                     if critical && let Some(control) = weak.upgrade() {
                         let kernel = Kernel { control };
                         let _first = kernel.stop_for(StopReason::WorkerFailed { name });
@@ -382,6 +452,38 @@ impl Kernel {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .pop()
+    }
+
+    /// Connects the kernel to the audit chain (boot step 13), for its own
+    /// privileged actions.
+    #[cfg(feature = "audit")]
+    pub(crate) fn set_audit(&self, audit: crate::AuditLog) {
+        let _first = self.control.audit.set(audit).is_ok();
+    }
+
+    /// Records a privileged action of the kernel, when audit is on. A
+    /// failure is returned to the caller to log.
+    #[cfg(feature = "audit")]
+    #[cfg_attr(not(feature = "config"), allow(dead_code))]
+    pub(crate) fn audit(
+        &self,
+        action: &str,
+        target: &str,
+        success: bool,
+    ) -> Result<(), crate::Error> {
+        match self.control.audit.get() {
+            Some(audit) if audit.is_enabled() => {
+                let outcome = if success {
+                    audit_trail::Outcome::Success
+                } else {
+                    audit_trail::Outcome::Failure
+                };
+                audit
+                    .record("kernel", action, target, outcome)
+                    .map(|_id| ())
+            }
+            _ => Ok(()),
+        }
     }
 
     pub(crate) fn metrics(&self) -> Option<&metrics::KernelMetrics> {

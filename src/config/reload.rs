@@ -24,6 +24,8 @@ pub(crate) struct Reloader {
     running: Mutex<()>,
     kernel: Kernel,
     log: LogSlot,
+    #[cfg(feature = "secrets")]
+    secrets: Option<std::sync::Arc<crate::secrets::State>>,
 }
 
 impl Reloader {
@@ -33,6 +35,7 @@ impl Reloader {
         sections: Sections,
         kernel: Kernel,
         log: LogSlot,
+        #[cfg(feature = "secrets")] secrets: Option<std::sync::Arc<crate::secrets::State>>,
     ) -> Reloader {
         Reloader {
             source,
@@ -41,6 +44,8 @@ impl Reloader {
             running: Mutex::new(()),
             kernel,
             log,
+            #[cfg(feature = "secrets")]
+            secrets,
         }
     }
 
@@ -70,6 +75,29 @@ impl Reloader {
         if let Some(metrics) = self.kernel.metrics() {
             metrics.reload(result.is_ok());
         }
+        #[cfg(feature = "registry")]
+        match &result {
+            Ok(version) => self
+                .kernel
+                .emit(|| crate::kernel::Event::Reloaded { version: *version }),
+            Err(error) => self.kernel.emit(|| crate::kernel::Event::ReloadRefused {
+                by: error.subsystem().unwrap_or("configuration").to_owned(),
+                reason: error.to_string(),
+            }),
+        }
+        #[cfg(feature = "audit")]
+        {
+            let target = match &result {
+                Ok(version) => format!("configuration:v{version}"),
+                Err(_) => format!("configuration:v{}", self.snapshot.version()),
+            };
+            if let Err(error) = self.kernel.audit("config.reload", &target, result.is_ok()) {
+                self.log.error(
+                    "the reload could not be audited",
+                    &[("error", Val::Str(&error.to_string()))],
+                );
+            }
+        }
         result
     }
 
@@ -86,16 +114,51 @@ impl Reloader {
         let config = load::load(&self.source, version)?;
         let new_sections = sections::read(&config)?;
 
+        // Secret references are resolved for this version only: what the
+        // configuration in force reads does not change.
+        #[cfg(feature = "secrets")]
+        let staged = match &self.secrets {
+            Some(state) => Some(state.stage(&config, new_sections.secrets.allow_plain, version)?),
+            None => None,
+        };
+
         // Phase one: every subsystem prepares; any refusal changes nothing.
+        let prepared = self.prepare(&config);
+        #[cfg(feature = "secrets")]
+        if prepared.is_err()
+            && let Some(table) = &staged
+        {
+            table.retire();
+        }
+        let commits = prepared?;
+
+        // Phase two: publish, then commit. Nothing here can fail.
+        let old_sections = {
+            let mut current = self.sections.lock().unwrap_or_else(PoisonError::into_inner);
+            std::mem::replace(&mut *current, new_sections.clone())
+        };
+        let published = self.snapshot.publish(config);
+        #[cfg(feature = "secrets")]
+        if let (Some(state), Some(table)) = (&self.secrets, staged) {
+            state.accept(table);
+        }
+        for commit in commits {
+            commit.apply();
+        }
+        self.note_restart_only(&old_sections, &new_sections);
+        Ok(published)
+    }
+
+    /// Phase one: every subsystem prepares its change.
+    fn prepare(&self, config: &Config) -> Result<Vec<Commit>, Error> {
         let mut commits: Vec<Commit> = Vec::new();
         for slot in self.kernel.slots() {
             let mut subsystem = slot
                 .subsystem
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                subsystem.reload(&config)
-            }));
+            let prepared =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| subsystem.reload(config)));
             match prepared {
                 Ok(Ok(commit)) => commits.push(commit),
                 Ok(Err(failure)) => {
@@ -118,17 +181,7 @@ impl Reloader {
             }
         }
 
-        // Phase two: publish, then commit. Nothing here can fail.
-        let old_sections = {
-            let mut current = self.sections.lock().unwrap_or_else(PoisonError::into_inner);
-            std::mem::replace(&mut *current, new_sections.clone())
-        };
-        let published = self.snapshot.publish(config);
-        for commit in commits {
-            commit.apply();
-        }
-        self.note_restart_only(&old_sections, &new_sections);
-        Ok(published)
+        Ok(commits)
     }
 
     /// Logs the sections whose changes take effect at the next start.

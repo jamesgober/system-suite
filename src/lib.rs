@@ -33,7 +33,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! system-suite = { version = "0.4", default-features = false, features = ["sys"] }
+//! system-suite = { version = "0.5", default-features = false, features = ["sys"] }
 //! ```
 //!
 //! ```ignore
@@ -57,11 +57,12 @@
 //!
 //! ## Status
 //!
-//! `0.4`: configuration with two-phase reload, metrics, subsystems, the
-//! urgent line, supervised workers, timers, and health. Audit, the event
-//! registry, globals, randomness, and secrets arrive in `0.5`. The public
-//! API is in `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in
-//! the [repository](https://github.com/jamesgober/system-suite)).
+//! `0.5`: feature complete. Configuration with secret references and
+//! two-phase reload, metrics, audit, kernel events, subsystems, the urgent
+//! line, supervised workers, timers, health, and Windows service control.
+//! Measured performance arrives in `0.6`. The public API is in
+//! `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in the
+//! [repository](https://github.com/jamesgober/system-suite)).
 
 #![doc(html_root_url = "https://docs.rs/system-suite")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -82,6 +83,8 @@
     )
 )]
 
+#[cfg(feature = "audit")]
+mod audit_log;
 mod boot;
 mod builder;
 #[cfg(feature = "config")]
@@ -89,6 +92,8 @@ mod builder;
 pub mod config;
 mod error;
 pub mod exit;
+#[cfg(feature = "globals")]
+mod globals;
 #[cfg(feature = "kernel")]
 pub mod kernel;
 #[cfg(feature = "kernel")]
@@ -99,6 +104,8 @@ mod member;
 mod metrics_handle;
 #[cfg(feature = "kernel")]
 pub mod runtime;
+#[cfg(feature = "secrets")]
+mod secrets;
 // Without `config` only the defaults exist, so some values are never built.
 #[cfg_attr(not(feature = "config"), allow(dead_code))]
 mod sections;
@@ -113,6 +120,12 @@ mod staged;
 mod sync;
 mod system;
 
+#[cfg(feature = "audit")]
+#[cfg_attr(docsrs, doc(cfg(feature = "audit")))]
+pub use crate::audit_log::AuditLog;
+#[cfg(feature = "globals")]
+#[cfg_attr(docsrs, doc(cfg(feature = "globals")))]
+pub use crate::globals::foundation;
 #[cfg(feature = "kernel")]
 pub use crate::staged::Boot;
 pub use crate::{
@@ -163,6 +176,36 @@ pub use signal_mod as signal;
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub use metrics_lib as metrics;
+
+/// Tamper-evident audit records: [audit-trail](https://docs.rs/audit-trail).
+/// The system's chain is [`Foundation::audit`].
+#[cfg(feature = "audit")]
+#[cfg_attr(docsrs, doc(cfg(feature = "audit")))]
+pub use audit_trail as audit;
+
+/// Event and callback registry: [registry-io](https://docs.rs/registry-io).
+/// The kernel's events arrive on [`Foundation::events`].
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
+pub use registry_io as registry;
+
+/// Process-wide typed values: [global-lib](https://docs.rs/global-lib).
+#[cfg(feature = "globals")]
+#[cfg_attr(docsrs, doc(cfg(feature = "globals")))]
+pub use global_lib as global;
+
+/// Tiered randomness: [mod-rand](https://docs.rs/mod-rand). Tokens and
+/// nonces come from `rand::tier3` (the OS CSPRNG). A project that also
+/// uses the `rand` crate writes `use system_suite::rand as srand;`.
+#[cfg(feature = "rand")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
+pub use mod_rand as rand;
+
+/// Page-locked secret storage: [key-vault](https://docs.rs/key-vault). The
+/// system's vault is [`Foundation::vault`].
+#[cfg(feature = "secrets")]
+#[cfg_attr(docsrs, doc(cfg(feature = "secrets")))]
+pub use key_vault as vault;
 
 /// Monotonic and wall clocks, mockable: [clock-lib](https://docs.rs/clock-lib).
 #[cfg(feature = "time")]

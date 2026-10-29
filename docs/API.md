@@ -94,11 +94,11 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
 
 ```toml
 [dependencies]
-system-suite = "0.4"
+system-suite = "0.5"
 
 [build-dependencies]
 # Only for build info (the build commit, time, and profile in the first log line).
-system-suite = { version = "0.4", default-features = false, features = ["sys"] }
+system-suite = { version = "0.5", default-features = false, features = ["sys"] }
 ```
 
 ```rust,ignore
@@ -1624,6 +1624,8 @@ let pool = password.with(|bytes| Pool::connect(&url, bytes))??;
 
 Cost: resolution at boot and reload only; `with` is key-vault's read path [measured in key-vault].
 
+The vault is built with key-vault's BLAKE3 normalization off, so `with` sees the bytes that were referenced. Each configuration version stores its values under its own names: a reload resolves the new version before subsystems prepare (they can read the new secrets in `reload`), a refused reload removes them again, and a `Secret` taken from the configuration in force keeps its value through one reload (D-064). A `file:` reference is checked on the opened file (Unix: no group or other permission bit; owner the service user or root), at most 64 KiB, with one trailing newline removed. The values are removed from the vault (wiped) at shutdown step 7.
+
 ### Finding the file
 
 The first that applies wins:
@@ -1647,7 +1649,7 @@ Every section is optional and every key has a secure default. The complete refer
 | `[metrics]` | `enabled` (`true`), `max_series` (`10000`); `process` would come with `metrics-system`, not accepted (D-056) | 0.4 |
 | `[kernel]` | `shutdown_deadline` (`"25s"`), `member_reserve` (`"2s"`), `notify` (`"auto"`), `reload_signal` (`true`), `dump_signal` (`true`) | 0.4 |
 | `[ids]` | `worker` (`0`; 0 to 1023), `epoch` (milliseconds since 1970; id-forge's default) | 0.4 |
-| `[audit]` | `enabled` (`true` when compiled in), `file` (`<data dir>/audit/<name>.audit`), `hash` (`"sha256"`), `sync` (`"every"`; or `"flush"`) | 0.5 |
+| `[audit]` | `enabled` (`true` when compiled in), `file` (`<data dir>/audit/<name>.audit`), `hash` (`"sha256"`), `sync` (`"every"`; or `"flush"`), `repair_tail` (`false`) | 0.5 |
 | `[secrets]` | `allow_plain` (`false`) | 0.5 |
 
 Settings given to the `Builder` win over the file. There are no implicit environment overrides of individual keys (D-021); a value that must come from the environment says so with a reference. An unknown key in one of these sections is refused with `ConfigInvalid`, so a misspelt key cannot silently leave a setting at its default; other sections belong to the application and are not checked.
@@ -1665,8 +1667,9 @@ impl AuditLog {
     pub fn record(&self, actor: &str, action: &str, target: &str, outcome: audit::Outcome)
         -> Result<audit::RecordId, Error>;
     pub fn sync(&self) -> Result<(), Error>;
-    pub fn path(&self) -> &Path;
-    pub fn next_id(&self) -> audit::RecordId;
+    pub fn path(&self) -> Option<&Path>;          // None when audit is disabled (D-060)
+    pub fn next_id(&self) -> Option<audit::RecordId>;
+    pub fn is_enabled(&self) -> bool;
 }
 ```
 
@@ -1725,7 +1728,7 @@ Signals reach only the kernel (D-006, invariant). The kernel installs signal-mod
 | dump | SIGUSR1 | service user control code 128 | the health report, phase, urgent level, workers, build and instance info written to the log | 0.4 |
 | a second stop signal during shutdown | | | recorded and ignored: the shutdown already has a deadline | 0.3 |
 
-The Windows service rows need a signal-mod release that is requested (D-014, [signal-mod#4](https://github.com/jamesgober/signal-mod/issues/4)); until it ships, a Windows service is stopped through the console events the service manager sends at system shutdown. `[kernel] reload_signal` and `dump_signal` turn those two off.
+The Windows service rows come from signal-mod 2.1's service control (D-065): `System::run` hands the main thread to the service control manager when the process was started by it. `[kernel] reload_signal` and `dump_signal` turn those two off.
 
 ## Versioning
 

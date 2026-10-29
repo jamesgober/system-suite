@@ -11,8 +11,11 @@ use std::{
         Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[cfg(not(feature = "rand"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{Error, ErrorKind, kernel::UrgentLine};
 
@@ -299,11 +302,18 @@ impl Backoff {
 /// A fraction in `[0, 0.25)`, different from call to call. Jitter only
 /// spreads restarts out; it needs no cryptographic quality.
 fn jitter_fraction(attempt: u32) -> f64 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let mut x = u64::from(nanos) ^ (u64::from(attempt) << 32) ^ 0x9E37_79B9_7F4A_7C15;
+    // mod-rand's process-unique value when compiled in, else the clock's
+    // nanoseconds; mixed with the attempt either way.
+    #[cfg(feature = "rand")]
+    let seed = mod_rand::tier2::unique_u64();
+    #[cfg(not(feature = "rand"))]
+    let seed = u64::from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0),
+    );
+    let mut x = seed ^ (u64::from(attempt) << 32) ^ 0x9E37_79B9_7F4A_7C15;
     x ^= x >> 33;
     x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
     x ^= x >> 33;

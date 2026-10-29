@@ -64,6 +64,12 @@ struct Shared {
     log: log_io::Logger,
     #[cfg(feature = "metrics")]
     metrics: crate::metrics_handle::MetricsRef,
+    #[cfg(feature = "audit")]
+    audit: crate::AuditLog,
+    #[cfg(feature = "registry")]
+    events: Arc<registry_io::SyncRegistry<crate::kernel::Event>>,
+    #[cfg(feature = "secrets")]
+    vault: key_vault::KeyVault,
     #[cfg(feature = "time")]
     clock: Arc<dyn clock_lib::Clock>,
     #[cfg(feature = "ids")]
@@ -160,6 +166,34 @@ impl Foundation {
         &*self.shared.clock
     }
 
+    /// The application's audit chain (boot step 13). With
+    /// [`Member::Audit`](crate::Member::Audit) disabled its operations fail
+    /// with [`Disabled`](crate::ErrorKind::Disabled).
+    #[cfg(feature = "audit")]
+    #[must_use]
+    pub fn audit(&self) -> &crate::AuditLog {
+        &self.shared.audit
+    }
+
+    /// The vault (boot step 8): the configuration's resolved secrets and
+    /// the keys registered in `on_vault`. Read secrets through
+    /// [`Config::secret`](crate::config::Config::secret).
+    #[cfg(feature = "secrets")]
+    #[must_use]
+    pub fn vault(&self) -> &key_vault::KeyVault {
+        &self.shared.vault
+    }
+
+    /// The kernel's event registry (boot step 14): register callbacks for
+    /// [`kernel::Event`](crate::kernel::Event)s. With
+    /// [`Member::Registry`](crate::Member::Registry) disabled the kernel
+    /// never notifies it.
+    #[cfg(feature = "registry")]
+    #[must_use]
+    pub fn events(&self) -> &Arc<registry_io::SyncRegistry<crate::kernel::Event>> {
+        &self.shared.events
+    }
+
     /// The Snowflake generator for entity ids, with the worker id (and
     /// epoch, if set) from `[ids]`. Use `try_next_id`: `next_id` panics on
     /// clock skew.
@@ -250,6 +284,11 @@ impl System {
                 metrics.boot_milliseconds(boot_ms);
             }
         }
+        #[cfg(feature = "globals")]
+        if parts.settings.process_wide && !parts.settings.is_disabled(crate::Member::Globals) {
+            crate::globals::publish(&foundation);
+            parts.published = true;
+        }
         parts.notify("READY=1");
         parts.notify("STATUS=ready");
         parts.mark_ready();
@@ -322,6 +361,27 @@ impl System {
     #[must_use]
     pub fn clock(&self) -> &dyn clock_lib::Clock {
         self.foundation.clock()
+    }
+
+    /// See [`Foundation::audit`].
+    #[cfg(feature = "audit")]
+    #[must_use]
+    pub fn audit(&self) -> &crate::AuditLog {
+        self.foundation.audit()
+    }
+
+    /// See [`Foundation::vault`].
+    #[cfg(feature = "secrets")]
+    #[must_use]
+    pub fn vault(&self) -> &key_vault::KeyVault {
+        self.foundation.vault()
+    }
+
+    /// See [`Foundation::events`].
+    #[cfg(feature = "registry")]
+    #[must_use]
+    pub fn events(&self) -> &Arc<registry_io::SyncRegistry<crate::kernel::Event>> {
+        self.foundation.events()
     }
 
     /// See [`Foundation::ids`].
@@ -428,9 +488,62 @@ impl System {
     /// `79` if a step missed the shutdown deadline.
     #[cfg(feature = "kernel")]
     pub fn run(self) -> ExitCode {
-        let reason = self.wait_for_stop();
+        #[cfg(all(windows, feature = "signals"))]
+        let system = match self.run_as_service() {
+            Ok(code) => return code,
+            Err(system) => *system,
+        };
+        #[cfg(not(all(windows, feature = "signals")))]
+        let system = self;
+        let reason = system.wait_for_stop();
         let cause = reason.to_string();
-        self.finish(reason.exit_code(), &cause)
+        system.finish(reason.exit_code(), &cause)
+    }
+
+    /// On Windows, offers the main thread to the service control manager
+    /// (signal-mod's `service::run`): reports `RUNNING`, waits for a stop,
+    /// reports `STOP_PENDING` with the shutdown deadline, runs the
+    /// shutdown, and reports `STOPPED` with the exit code. When the process
+    /// was not started as a service (or may not touch process-wide state),
+    /// the system comes back to run in the foreground.
+    #[cfg(all(windows, feature = "signals"))]
+    fn run_as_service(self) -> Result<ExitCode, Box<System>> {
+        use std::sync::{
+            Mutex, PoisonError,
+            atomic::{AtomicU8, Ordering},
+        };
+
+        if !self.parts.settings.process_wide
+            || self.parts.settings.is_disabled(crate::Member::Signals)
+        {
+            return Err(Box::new(self));
+        }
+        let name = self.name().to_owned();
+        let slot = Arc::new(Mutex::new(Some(self)));
+        let exit = Arc::new(AtomicU8::new(crate::exit::OK));
+        let (service_slot, service_exit) = (Arc::clone(&slot), Arc::clone(&exit));
+        // An error (most often: not started by the service manager) leaves
+        // the system unused, and it runs in the foreground.
+        let _ran = signal_mod::service::run(&name, move |status| {
+            let taken = service_slot
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            let Some(system) = taken else {
+                return u32::from(crate::exit::SOFTWARE);
+            };
+            let _reported = status.running();
+            let reason = system.wait_for_stop();
+            let _reported = status.stopping(system.parts.shutdown_budget());
+            let code = system.finish_code(reason.exit_code(), &reason.to_string());
+            service_exit.store(code, Ordering::Release);
+            u32::from(code)
+        });
+        let unused = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+        match unused {
+            Some(system) => Err(Box::new(system)),
+            None => Ok(ExitCode::from(exit.load(Ordering::Acquire))),
+        }
     }
 
     /// Parks the calling thread until a stop is requested and returns why.
@@ -456,9 +569,13 @@ impl System {
         self.finish(code, &cause)
     }
 
-    fn finish(mut self, code: u8, cause: &str) -> ExitCode {
+    fn finish(self, code: u8, cause: &str) -> ExitCode {
+        ExitCode::from(self.finish_code(code, cause))
+    }
+
+    fn finish_code(mut self, code: u8, cause: &str) -> u8 {
         self.finished = true;
-        ExitCode::from(self.parts.teardown(code, cause))
+        self.parts.teardown(code, cause)
     }
 }
 
@@ -530,6 +647,22 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
                 .metrics
                 .clone()
                 .ok_or_else(|| missing("the metrics registry"))?,
+            #[cfg(feature = "audit")]
+            audit: parts
+                .audit
+                .clone()
+                .unwrap_or_else(crate::AuditLog::disabled),
+            #[cfg(feature = "registry")]
+            events: parts
+                .events
+                .clone()
+                .unwrap_or_else(|| Arc::new(registry_io::SyncRegistry::new())),
+            #[cfg(feature = "secrets")]
+            vault: parts
+                .secrets
+                .as_ref()
+                .map(|state| state.vault().clone())
+                .ok_or_else(|| missing("the vault"))?,
             #[cfg(feature = "time")]
             clock: parts
                 .settings

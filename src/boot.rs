@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(any(
     feature = "kernel",
+    feature = "rand",
     feature = "env",
     feature = "log",
     feature = "sys",
@@ -73,11 +74,19 @@ pub(crate) struct Parts {
     pub(crate) recent: Option<std::sync::Arc<RecentLog>>,
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Option<crate::metrics_handle::MetricsRef>,
+    #[cfg(feature = "audit")]
+    pub(crate) audit: Option<crate::AuditLog>,
+    #[cfg(feature = "registry")]
+    pub(crate) events: Option<Arc<registry_io::SyncRegistry<crate::kernel::Event>>>,
+    #[cfg(feature = "secrets")]
+    pub(crate) secrets: Option<Arc<crate::secrets::State>>,
     #[cfg(feature = "signals")]
     pub(crate) signals: Option<crate::kernel::signals::SignalIntake>,
     #[cfg(feature = "kernel")]
     pub(crate) crash: Option<crate::kernel::crash::CrashHook>,
     notified_ready: bool,
+    #[cfg(feature = "globals")]
+    pub(crate) published: bool,
 }
 
 impl Parts {
@@ -110,11 +119,19 @@ impl Parts {
             recent: None,
             #[cfg(feature = "metrics")]
             metrics: None,
+            #[cfg(feature = "audit")]
+            audit: None,
+            #[cfg(feature = "registry")]
+            events: None,
+            #[cfg(feature = "secrets")]
+            secrets: None,
             #[cfg(feature = "signals")]
             signals: None,
             #[cfg(feature = "kernel")]
             crash: None,
             notified_ready: false,
+            #[cfg(feature = "globals")]
+            published: false,
         }
     }
 
@@ -136,6 +153,12 @@ impl Parts {
             return reloader.sections();
         }
         self.sections.clone()
+    }
+
+    /// The whole shutdown deadline in force.
+    #[cfg(all(windows, feature = "signals"))]
+    pub(crate) fn shutdown_budget(&self) -> Duration {
+        self.deadlines().0
     }
 
     /// The shutdown deadline and member reserve: the builder's, else the
@@ -176,11 +199,26 @@ impl Parts {
                 .urgent()
                 .raise(Level::Draining, "stop requested");
         }
+        #[cfg(feature = "globals")]
+        if self.published {
+            crate::globals::withdraw();
+            self.published = false;
+        }
         if self.notified_ready {
             self.notify("STOPPING=1");
             self.notify("STATUS=stopping");
         }
         self.log.info("stopping", &[("cause", Val::Str(cause))]);
+        #[cfg(feature = "audit")]
+        if let Some(audit) = &self.audit
+            && audit.is_enabled()
+            && let Err(error) = audit.record("kernel", "stop", cause, audit_trail::Outcome::Success)
+        {
+            self.log.error(
+                "the stop could not be audited",
+                &[("error", Val::Str(&error.to_string()))],
+            );
+        }
 
         // 2. Subsystems, in reverse of their start order.
         #[cfg(feature = "kernel")]
@@ -207,6 +245,49 @@ impl Parts {
                 );
                 code = crate::exit::DEADLINE;
             }
+        }
+
+        // 4. Registry: no handler runs while the members close.
+        #[cfg(feature = "registry")]
+        if let Some(events) = self.events.clone() {
+            let outcome = run_with_deadline("registry", deadline.max(Instant::now()), move || {
+                events.clear_and_wait();
+            });
+            if matches!(outcome, Outcome::Abandoned) {
+                self.log.error(
+                    "an event handler was still running at the deadline and was abandoned",
+                    &[],
+                );
+                code = crate::exit::DEADLINE;
+            }
+        }
+
+        // 5. Audit: every record is on disk before the members close.
+        #[cfg(feature = "audit")]
+        if let Some(audit) = self.audit.clone()
+            && audit.is_enabled()
+        {
+            let log = self.log.clone();
+            let outcome = run_with_deadline("audit", deadline.max(Instant::now()), move || {
+                if let Err(error) = audit.sync() {
+                    log.error(
+                        "the audit chain could not be synced",
+                        &[("error", Val::Str(&error.to_string()))],
+                    );
+                }
+            });
+            if matches!(outcome, Outcome::Abandoned) {
+                self.log
+                    .error("the audit sync was abandoned at the deadline", &[]);
+                code = crate::exit::DEADLINE;
+            }
+        }
+
+        // 7. Secrets: the configuration's secrets are removed from the
+        //    vault, which wipes them.
+        #[cfg(feature = "secrets")]
+        if let Some(secrets) = self.secrets.take() {
+            secrets.wipe();
         }
 
         // 8. Signals: a further signal gets the operating system's default.
@@ -256,6 +337,8 @@ impl Parts {
             let stop_deadline = crate::lifecycle::Deadline::at(deadline);
             let result = Arc::new(std::sync::Mutex::new(None));
             let result_slot = Arc::clone(&result);
+            #[cfg(feature = "registry")]
+            let stop_began = Instant::now();
             let outcome = run_with_deadline(&format!("subsystem-{name}"), deadline, move || {
                 let stopped = stop_slot
                     .subsystem
@@ -266,6 +349,19 @@ impl Parts {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stopped);
             });
+            #[cfg(feature = "registry")]
+            {
+                let (took, met_deadline) = match outcome {
+                    Outcome::Done(took) => (took, true),
+                    Outcome::Panicked => (stop_began.elapsed(), true),
+                    Outcome::Abandoned => (stop_began.elapsed(), false),
+                };
+                self.kernel.emit(|| crate::kernel::Event::SubsystemStopped {
+                    name: name.clone(),
+                    took,
+                    met_deadline,
+                });
+            }
             match outcome {
                 Outcome::Done(took) => {
                     let failure = result
@@ -505,7 +601,7 @@ pub(crate) fn run_steps(parts: &mut Parts, steps: &[(Step, StepFn)]) -> Result<(
 pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     let mut steps: Vec<(Step, StepFn)> = Vec::with_capacity(17);
     steps.push((Step::BuildInfo, step_build_info));
-    #[cfg(feature = "sys")]
+    #[cfg(any(feature = "sys", feature = "rand"))]
     steps.push((Step::Instance, step_instance));
     #[cfg(feature = "paths")]
     steps.push((Step::Paths, step_paths));
@@ -517,6 +613,8 @@ pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     steps.push((Step::Guard, step_guard));
     #[cfg(feature = "signals")]
     steps.push((Step::Signals, step_signals));
+    #[cfg(feature = "secrets")]
+    steps.push((Step::Secrets, step_secrets));
     #[cfg(feature = "paths")]
     steps.push((Step::Directories, step_directories));
     #[cfg(feature = "log")]
@@ -525,6 +623,10 @@ pub(crate) fn steps() -> Vec<(Step, StepFn)> {
     steps.push((Step::CrashCapture, step_crash_capture));
     #[cfg(feature = "metrics")]
     steps.push((Step::Metrics, step_metrics));
+    #[cfg(feature = "audit")]
+    steps.push((Step::Audit, step_audit));
+    #[cfg(feature = "registry")]
+    steps.push((Step::Registry, step_registry));
     #[cfg(feature = "kernel")]
     steps.push((Step::Kernel, step_kernel));
     steps
@@ -589,9 +691,29 @@ fn step_build_info(_parts: &mut Parts) -> Result<(), Error> {
 }
 
 /// Step 2: the instance (id, start time, host, pid, user).
-#[cfg(feature = "sys")]
+#[cfg(any(feature = "sys", feature = "rand"))]
 fn step_instance(parts: &mut Parts) -> Result<(), Error> {
-    parts.instance = Some(sys_lib::Instance::start());
+    // A sandbox that blocks the OS random source would otherwise surface
+    // later as a confusing failure in a token generator or the vault.
+    #[cfg(feature = "rand")]
+    {
+        let mut probe = [0_u8; 16];
+        mod_rand::tier3::fill_bytes(&mut probe).map_err(|e| {
+            Error::new(
+                ErrorKind::Entropy,
+                format!("the OS random source is unavailable: {e}"),
+                "allow getrandom (Linux), getentropy (macOS), or BCryptGenRandom (Windows) for the process",
+            )
+            .member_of(Member::Rand)
+            .caused_by(e)
+        })?;
+    }
+    #[cfg(feature = "sys")]
+    {
+        parts.instance = Some(sys_lib::Instance::start());
+    }
+    #[cfg(not(feature = "sys"))]
+    let _no_instance = parts;
     Ok(())
 }
 
@@ -894,6 +1016,64 @@ fn logs_to_file(parts: &Parts) -> bool {
     cfg!(feature = "log") && !parts.settings.is_disabled(Member::Log) && parts.sections.log.file
 }
 
+/// Step 8: the vault is built, the `on_vault` callbacks run, and every
+/// secret reference in the configuration is resolved into it.
+#[cfg(feature = "secrets")]
+fn step_secrets(parts: &mut Parts) -> Result<(), Error> {
+    // The original bytes come back from the vault: no normalization.
+    let vault = key_vault::KeyVaultBuilder::new()
+        .normalize_with_blake3(false)
+        .build();
+    let callbacks = std::mem::take(
+        parts
+            .settings
+            .on_vault
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    for callback in callbacks {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&vault)));
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(failure)) => {
+                return Err(Error::new(
+                    ErrorKind::Secret,
+                    format!("an on_vault callback failed: {failure}"),
+                    "fix the cause in the message",
+                )
+                .member_of(Member::Secrets)
+                .caused_by(failure.into_error()));
+            }
+            Err(_) => {
+                return Err(Error::new(
+                    ErrorKind::Secret,
+                    "an on_vault callback panicked",
+                    "fix the callback",
+                )
+                .member_of(Member::Secrets));
+            }
+        }
+    }
+    let state = Arc::new(crate::secrets::State::new(
+        vault,
+        #[cfg(feature = "env")]
+        parts.env.clone(),
+    ));
+    if !parts.settings.is_disabled(Member::Secrets)
+        && let Some(snapshot) = &parts.config
+    {
+        let config = snapshot.load();
+        let table = state.stage(
+            &config,
+            parts.sections.secrets.allow_plain,
+            config.version(),
+        )?;
+        state.accept(table);
+    }
+    parts.secrets = Some(state);
+    Ok(())
+}
+
 /// Step 9: the directories the enabled members write to, created
 /// owner-only. Only the log directory in this version.
 #[cfg(feature = "paths")]
@@ -1159,6 +1339,109 @@ fn step_metrics(parts: &mut Parts) -> Result<(), Error> {
     Ok(())
 }
 
+/// Step 13: the audit chain: opened (or created) owner-only, every record
+/// verified, appending resumed at its tail. A chain that does not verify
+/// stops the boot (`AuditTampered`).
+#[cfg(feature = "audit")]
+fn step_audit(parts: &mut Parts) -> Result<(), Error> {
+    use crate::{audit_log::HashKind, sections::AuditHash};
+
+    let section = parts.sections.audit.clone();
+    if parts.settings.is_disabled(Member::Audit) || !section.enabled {
+        parts.audit = Some(crate::AuditLog::disabled());
+        return Ok(());
+    }
+    let path = match &section.file {
+        Some(file) => file.clone(),
+        None => {
+            let app = parts.app.as_ref().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Audit,
+                    "the audit chain has no directory: the paths member is not set up",
+                    "set [audit] file to an absolute path",
+                )
+            })?;
+            let dir = app
+                .create_private(path_lib::Kind::Data, "audit")
+                .map_err(|e| paths_error(&e).caused_by(e))?;
+            dir.join(format!("{}.audit", parts.settings.name))
+        }
+    };
+    let hash = match section.hash {
+        AuditHash::Sha256 => HashKind::Sha256,
+        #[cfg(feature = "audit-blake3")]
+        AuditHash::Blake3 => HashKind::Blake3,
+        #[cfg(not(feature = "audit-blake3"))]
+        AuditHash::Blake3 => HashKind::Sha256,
+    };
+    let (audit, summary) =
+        crate::AuditLog::open(&path, hash, section.sync_every, section.repair_tail)?;
+    parts.log.info(
+        "audit chain opened",
+        &[
+            ("path", Val::Str(&path.display().to_string())),
+            ("records", Val::U64(summary.records)),
+            (
+                "created",
+                Val::Str(if summary.created { "yes" } else { "no" }),
+            ),
+        ],
+    );
+    if let Some((bytes, kept)) = &summary.cut {
+        parts.log.error(
+            "the audit chain's incomplete last record was cut; its bytes were kept",
+            &[
+                ("bytes", Val::U64(*bytes)),
+                ("kept_in", Val::Str(&kept.display().to_string())),
+            ],
+        );
+    }
+    if !section.sync_every {
+        // `sync = "flush"`: on disk every second and at shutdown.
+        let flushed = audit.clone();
+        let log = parts.log.clone();
+        // The timer runs until the runtime stops at shutdown step 3.
+        let _timer =
+            parts
+                .kernel
+                .runtime()
+                .every("audit-sync", Duration::from_secs(1), move || {
+                    if let Err(error) = flushed.sync() {
+                        log.error(
+                            "the audit chain could not be synced",
+                            &[("error", Val::Str(&error.to_string()))],
+                        );
+                    }
+                })?;
+    }
+    parts.kernel.set_audit(audit.clone());
+    parts.audit = Some(audit);
+    Ok(())
+}
+
+/// Step 14: the kernel's event registry. With `Member::Registry` disabled
+/// the registry exists (its accessor does) but the kernel never notifies
+/// it.
+#[cfg(feature = "registry")]
+fn step_registry(parts: &mut Parts) -> Result<(), Error> {
+    let events = Arc::new(registry_io::SyncRegistry::new());
+    let log = parts.log.clone();
+    events.on_panic(move |panic| {
+        log.error(
+            "an event handler panicked; the other handlers ran",
+            &[(
+                "message",
+                Val::Str(panic.message().unwrap_or("non-string payload")),
+            )],
+        );
+    });
+    if !parts.settings.is_disabled(Member::Registry) {
+        parts.kernel.set_events(Arc::clone(&events));
+    }
+    parts.events = Some(events);
+    Ok(())
+}
+
 /// Step 15: the kernel: connected to the log and metrics, the reloader set
 /// up. Its runtime starts its threads on first use.
 #[cfg(feature = "kernel")]
@@ -1180,6 +1463,11 @@ fn step_kernel(parts: &mut Parts) -> Result<(), Error> {
             parts.sections.clone(),
             parts.kernel.clone(),
             parts.log.clone(),
+            #[cfg(feature = "secrets")]
+            parts
+                .secrets
+                .clone()
+                .filter(|_| !parts.settings.is_disabled(Member::Secrets)),
         )));
     }
     Ok(())

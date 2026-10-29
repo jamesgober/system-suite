@@ -55,16 +55,19 @@ Exit: configuration loads, validates, and reloads (T7); subsystems register and 
 
 ## v0.5.0 - Feature complete
 API: every remaining item in `PLAN.md` section 8 (SUI-15 `Secret`, SUI-28, SUI-29, SUI-30); audit, registry, globals, rand, secrets wired.
-Requires: audit-trail with verified resume, owner-only files, sync, and a monotonic clock ([audit-trail#3](https://github.com/jamesgober/audit-trail/issues/3)); signal-mod Windows service control ([signal-mod#4](https://github.com/jamesgober/signal-mod/issues/4)); sys-lib 0.5 memory pressure for the urgent line's `Shed` watermark.
+Requires: audit-trail 1.1.0 (released for it: verified resume, owner-only files, sync, a monotonic clock; [audit-trail#3](https://github.com/jamesgober/audit-trail/issues/3)); signal-mod 2.1.0 (released for it: Windows service control; [signal-mod#4](https://github.com/jamesgober/signal-mod/issues/4)).
 Exit: every FR implemented and tested on Linux, macOS, and Windows; `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`, `docs/PLATFORM-NOTES.md` complete.
-- [ ] audit-trail, registry-io, global-lib, mod-rand, key-vault wired behind their features; secret references with T2 tests.
-- [ ] Windows service control through signal-mod (OD-6, D-014).
-- [ ] Memory watermark raises the urgent line to `Shed` (sys-lib `mem::pressure`).
-- [ ] Feature-combination test matrix (default, full, none, each member alone).
-- [ ] Error-suite and security-signals hooks exposed (wired when those packages publish).
+- [x] audit-trail, registry-io, global-lib, mod-rand, key-vault wired behind their features; secret references with T2 tests (D-060 to D-064).
+- [x] Windows service control through signal-mod 2.1 (OD-6, D-014, D-065).
+- Moved to 0.6 (D-066): the memory watermark that raises the urgent line to `Shed`. It needs sys-lib 0.4.0's `mem::pressure()`, which another session is building and which is not published; 0.5 does not wait for it.
+- [x] Feature-combination test matrix: every member alone on Linux, macOS, and Windows, plus default, all, and none (D-067).
+- [x] Error-suite and security-signals hooks exposed: `Link::report_error` (logged, counted, and delivered to the error suite when it publishes) and `UrgentLine::set` with `Shed` and `Lockdown` (the security package's entry point, audited). Wiring waits for those packages.
+- [x] `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`, `docs/PLATFORM-NOTES.md`.
 
 ## v0.6.0 - Optimisation
 Exit: every target in `PLAN.md` section 13 measured and published.
+Requires: sys-lib 0.4.0 (`mem::pressure`) for the memory watermark moved from 0.5 (D-066).
+- [ ] Memory watermark raises the urgent line to `Shed` (sys-lib `mem::pressure`), moved from 0.5.
 - [ ] Boot benchmark harness; boot timeline per step.
 - [ ] `docs/PERFORMANCE.md` published; criterion baselines stored; the 5% regression gate active.
 

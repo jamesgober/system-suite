@@ -137,11 +137,11 @@ fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, actio
         return;
     }
     match signal {
-        Signal::Hangup if !actions.reload_on => log.info(
+        s if s == RELOAD && !actions.reload_on => log.info(
             "reload signal ignored: [kernel] reload_signal is off",
             &[("signal", Val::Str(name))],
         ),
-        Signal::Hangup => match actions.reload.get() {
+        s if s == RELOAD => match actions.reload.get() {
             Some(reload) => {
                 log.info("reload signal received", &[("signal", Val::Str(name))]);
                 reload();
@@ -166,6 +166,14 @@ fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, actio
     }
 }
 
+/// The signal that asks for a reload: SIGHUP on Unix; on Windows the
+/// service manager's parameter-change control, which signal-mod delivers
+/// as `User2`.
+#[cfg(unix)]
+const RELOAD: Signal = Signal::Hangup;
+#[cfg(not(unix))]
+const RELOAD: Signal = Signal::User2;
+
 /// The stop and notify sets for this OS.
 ///
 /// On Windows signal-mod reports logoff and system shutdown as `Hangup`, so
@@ -187,7 +195,10 @@ fn signal_sets() -> (SignalSet, SignalSet) {
         .with(Signal::Interrupt)
         .with(Signal::Quit)
         .with(Signal::Hangup);
-    (stop, SignalSet::empty())
+    // Only the service control manager produces these on Windows: user
+    // control code 128 (dump) and parameter change (reload).
+    let notify = SignalSet::empty().with(Signal::User1).with(Signal::User2);
+    (stop, notify)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -217,6 +228,8 @@ fn signal_name(signal: Signal) -> &'static str {
         Signal::Interrupt => "CTRL_C",
         Signal::Quit => "CTRL_BREAK",
         Signal::Hangup => "CTRL_LOGOFF_OR_SHUTDOWN",
+        Signal::User1 => "SERVICE_CONTROL_128",
+        Signal::User2 => "SERVICE_CONTROL_PARAMCHANGE",
         _ => "console event",
     }
 }
