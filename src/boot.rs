@@ -1379,6 +1379,15 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
             dir.join(format!("{}.audit", parts.settings.name))
         }
     };
+    // The anchor lives in the state directory, apart from the chain (D-072).
+    let anchor = match &parts.app {
+        Some(app) => Some(
+            app.create_private(path_lib::Kind::State, "audit")
+                .map_err(|e| paths_error(&e).caused_by(e))?
+                .join(format!("{}.anchor", parts.settings.name)),
+        ),
+        None => None,
+    };
     let hash = match section.hash {
         AuditHash::Sha256 => HashKind::Sha256,
         #[cfg(feature = "audit-blake3")]
@@ -1386,8 +1395,13 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
         #[cfg(not(feature = "audit-blake3"))]
         AuditHash::Blake3 => HashKind::Sha256,
     };
-    let (audit, summary) =
-        crate::AuditLog::open(&path, hash, section.sync_every, section.repair_tail)?;
+    let (audit, summary) = crate::AuditLog::open(
+        &path,
+        hash,
+        section.sync_every,
+        section.repair_tail,
+        anchor.as_deref(),
+    )?;
     parts.log.info(
         "audit chain opened",
         &[
@@ -1427,6 +1441,9 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
                 })?;
     }
     parts.kernel.set_audit(audit.clone());
+    if let Some(crash) = &parts.crash {
+        crash.set_audit(audit.clone());
+    }
     parts.audit = Some(audit);
     Ok(())
 }

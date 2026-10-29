@@ -780,8 +780,11 @@ fn test_a_cut_audit_tail_fails_until_repair_is_allowed() {
         .unwrap();
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
     let path = audit_file(&root, "kernel-cut");
-    let bytes = fs::read(&path).unwrap();
-    fs::write(&path, &bytes[..bytes.len() - 5]).unwrap();
+    // A crash in the middle of a write: part of a record after the last
+    // complete (and anchored) one.
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.extend_from_slice(&[0, 0, 0, 90, 1, 2, 3, 4, 5]);
+    fs::write(&path, &bytes).unwrap();
 
     let error = quiet("kernel-cut", &root).start().err().unwrap();
     assert_eq!(error.kind(), ErrorKind::Audit);
@@ -1086,5 +1089,51 @@ fn test_the_boot_timeline_lists_every_step_in_order() {
     assert!(steps.contains(&Step::Configuration));
     assert!(steps.contains(&Step::Subsystems));
     assert_eq!(steps.last(), Some(&Step::Ready));
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+fn anchor_file(root: &Root, name: &str) -> PathBuf {
+    root.path()
+        .join("state")
+        .join("audit")
+        .join(format!("{name}.anchor"))
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_replaced_or_shortened_audit_chain_is_refused_by_its_anchor() {
+    use system_suite::audit::Outcome;
+
+    let root = Root::new("anchor");
+    let system = quiet("kernel-anchor", &root).start().unwrap();
+    for target in ["user:1", "user:2"] {
+        let _id = system
+            .audit()
+            .record("admin:1", "user.delete", target, Outcome::Success)
+            .unwrap();
+    }
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let chain = audit_file(&root, "kernel-anchor");
+    let anchor = anchor_file(&root, "kernel-anchor");
+    assert!(anchor.is_file(), "no anchor at {}", anchor.display());
+
+    // Replacing the chain with an empty one verifies on its own; the
+    // anchor refuses it.
+    let original = fs::read(&chain).unwrap();
+    fs::remove_file(&chain).unwrap();
+    let error = quiet("kernel-anchor", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::AuditTampered);
+    assert!(error.to_string().contains("anchored"), "{error}");
+
+    // The original chain passes again.
+    fs::write(&chain, &original).unwrap();
+    let system = quiet("kernel-anchor", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+
+    // Moving both aside on purpose starts a new chain.
+    fs::remove_file(&chain).unwrap();
+    fs::remove_file(&anchor).unwrap();
+    let system = quiet("kernel-anchor", &root).start().unwrap();
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
