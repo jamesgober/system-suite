@@ -229,6 +229,16 @@ pub(crate) fn parse(text: &str, source: Option<&Path>, version: u64) -> Result<C
 /// user can change it (Unix; checked on the opened file, D-049), or when it
 /// is larger than 1 MiB.
 pub(crate) fn read_checked(path: &Path, what: &str) -> Result<String, Error> {
+    // A regular file only, checked before opening: opening a FIFO would
+    // block the boot (or the reload) until someone writes to it.
+    let metadata = fs::metadata(path).map_err(|e| io_error(path, what, &e))?;
+    if !metadata.is_file() {
+        return Err(Error::new(
+            ErrorKind::ConfigInvalid,
+            format!("the {what} {} is not a regular file", path.display()),
+            "point the setting at a regular file",
+        ));
+    }
     let file = fs::File::open(path).map_err(|e| io_error(path, what, &e))?;
     crate::secure_file::check_open(&file, path, what)?;
     let mut text = String::new();
@@ -475,13 +485,18 @@ mod tests {
         fs::write(&path, "[a]\nb = 1\n").ok();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o664)).ok();
         assert_eq!(
-            crate::secure_file::check(&path, "configuration file")
+            read_checked(&path, "configuration file")
+                .map(|_| ())
                 .err()
                 .map(|e| e.kind()),
             Some(ErrorKind::ConfigInsecure)
         );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).ok();
-        assert!(crate::secure_file::check(&path, "configuration file").is_ok());
+        assert!(
+            read_checked(&path, "configuration file")
+                .map(|_| ())
+                .is_ok()
+        );
         drop(fs::remove_dir_all(&dir));
     }
 }

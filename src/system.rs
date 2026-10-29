@@ -266,14 +266,25 @@ impl System {
         let boot_ms = crate::boot::millis(parts.began.elapsed());
         #[cfg(feature = "signals")]
         if let Some(intake) = &parts.signals {
+            // Both run off the signal thread, so a slow dump or reload never
+            // holds up a stop signal behind it.
             let dump = foundation.clone();
-            intake.set_dump(Box::new(move || write_dump(&dump)));
+            intake.set_dump(Box::new(move || {
+                let dump = dump.clone();
+                let _spawned = std::thread::Builder::new()
+                    .name("system-suite-dump".to_owned())
+                    .spawn(move || write_dump(&dump));
+            }));
             #[cfg(feature = "config")]
             if let Some(reloader) = &parts.reloader {
                 let reloader = Arc::clone(reloader);
                 intake.set_reload(Box::new(move || {
-                    // The outcome is logged and counted by the reloader.
-                    drop(reloader.reload());
+                    let reloader = Arc::clone(&reloader);
+                    // The outcome is logged and counted by the reloader;
+                    // reloads are serialised inside it.
+                    let _spawned = std::thread::Builder::new()
+                        .name("system-suite-reload".to_owned())
+                        .spawn(move || drop(reloader.reload()));
                 }));
             }
         }

@@ -137,6 +137,25 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
 
     s.kernel.shutdown_deadline = config.get("kernel.shutdown_deadline")?;
     s.kernel.member_reserve = config.get("kernel.member_reserve")?;
+    // Checked here so a reload is held to the same rules as the boot.
+    let deadline = s
+        .kernel
+        .shutdown_deadline
+        .unwrap_or(crate::builder::DEFAULT_SHUTDOWN_DEADLINE);
+    if deadline.is_zero() || deadline > crate::builder::MAX_SHUTDOWN_DEADLINE {
+        return Err(invalid(
+            "`kernel.shutdown_deadline` must be more than zero and at most one hour",
+            "set `kernel.shutdown_deadline` to a duration from \"1ms\" to \"1h\"",
+        ));
+    }
+    if let Some(reserve) = s.kernel.member_reserve
+        && reserve >= deadline
+    {
+        return Err(invalid(
+            "`kernel.member_reserve` must be shorter than the shutdown deadline",
+            "set `kernel.member_reserve` below `kernel.shutdown_deadline`",
+        ));
+    }
     if let Some(notify) = config.get::<String>("kernel.notify")? {
         s.kernel.notify = match notify.as_str() {
             "auto" => true,

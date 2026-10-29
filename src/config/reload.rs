@@ -143,7 +143,15 @@ impl Reloader {
             state.accept(table);
         }
         for commit in commits {
-            commit.apply();
+            // A panicking commit must not stop the others or the reload's
+            // record: it is logged and the rest are applied.
+            let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| commit.apply()));
+            if applied.is_err() {
+                self.log.error(
+                    "a subsystem's reload commit panicked; the other commits were applied",
+                    &[],
+                );
+            }
         }
         self.note_restart_only(&old_sections, &new_sections);
         Ok(published)

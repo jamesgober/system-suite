@@ -1164,3 +1164,18 @@ fn test_t3_the_audit_chain_and_anchor_are_owner_only() {
         "anchor directory"
     );
 }
+
+#[cfg(all(feature = "audit", unix))]
+#[test]
+fn test_t3_an_audit_chain_others_can_change_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = Root::new("auditloose");
+    let system = quiet("kernel-auditloose", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let chain = audit_file(&root, "kernel-auditloose");
+    fs::set_permissions(&chain, fs::Permissions::from_mode(0o620)).unwrap();
+    let error = quiet("kernel-auditloose", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::ConfigInsecure);
+    assert!(error.to_string().contains("audit chain"), "{error}");
+}

@@ -124,6 +124,20 @@ impl AuditLog {
         repair_tail: bool,
         anchor: Option<&Path>,
     ) -> Result<(AuditLog, OpenSummary), Error> {
+        // An existing chain (perhaps at a configured `[audit] file`) is
+        // refused when another user could rewrite it; a new one is created
+        // owner-only by audit-trail.
+        if path.exists() {
+            let existing = File::open(path).map_err(|e| {
+                Error::new(
+                    ErrorKind::Audit,
+                    format!("the audit chain {} cannot be opened: {e}", path.display()),
+                    "check that the data directory is readable by the service's user",
+                )
+                .member_of(Member::Audit)
+            })?;
+            crate::secure_file::check_open(&existing, path, "audit chain")?;
+        }
         let clock = MonotonicClock::new(SystemClock::new());
         let opened = if repair_tail {
             Chain::open_file_repairing_tail(path, AuditHasher::new(hash), clock)

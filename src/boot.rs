@@ -836,14 +836,13 @@ fn step_environment(parts: &mut Parts) -> Result<(), Error> {
             None => None,
         }
     };
+    // Read once, checked on the opened file, then parsed from the text
+    // (D-073): the file checked is the file read.
     let env = match &path {
-        Some(path) => {
-            if path.is_file() {
-                crate::secure_file::check(path, "environment file")?;
-            }
-            env_lib::Env::open(path)
+        Some(path) if path.exists() => {
+            env_lib::Env::from_text(&crate::secure_file::read_env_file(path)?)
         }
-        None => Ok(env_lib::Env::new()),
+        _ => Ok(env_lib::Env::new()),
     };
     let env = env.and_then(|env| env.with_prefix(&prefix)).map_err(|e| {
         Error::new(
