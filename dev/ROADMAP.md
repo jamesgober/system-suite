@@ -66,10 +66,9 @@ Exit: every FR implemented and tested on Linux, macOS, and Windows; `docs/ARCHIT
 
 ## v0.6.0 - Optimisation
 Exit: every target in `PLAN.md` section 13 measured and published.
-Requires: sys-lib 0.4.0 (`mem::pressure`) for the memory watermark moved from 0.5 (D-066).
-- [ ] Memory watermark raises the urgent line to `Shed` (sys-lib `mem::pressure`), moved from 0.5.
-- [ ] Boot benchmark harness; boot timeline per step.
-- [ ] `docs/PERFORMANCE.md` published; criterion baselines stored; the 5% regression gate active.
+- Moved on (D-071): the memory watermark that raises the urgent line to `Shed`. It ships in the release after sys-lib 0.4.0 (`mem::pressure`) is published; sys-lib is at 0.3.0.
+- [x] Boot benchmark harness (standard library only, D-068); boot timeline per step (`System::boot_timeline`, D-070).
+- [x] `docs/PERFORMANCE.md` published (every target met on Linux and Windows); baselines stored in `benches/baseline/`; the 5% regression gate with a noise floor active in the release routine (D-068). Idle CPU and wake-ups on macOS and Windows wait for sys-lib 0.4's live readings.
 
 ## v0.7.0 - Hardening
 Exit: no open finding; every threat has a passing attack test.

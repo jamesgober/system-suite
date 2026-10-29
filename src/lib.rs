@@ -33,7 +33,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! system-suite = { version = "0.5", default-features = false, features = ["sys"] }
+//! system-suite = { version = "0.6", default-features = false, features = ["sys"] }
 //! ```
 //!
 //! ```ignore
@@ -60,7 +60,7 @@
 //! `0.5`: feature complete. Configuration with secret references and
 //! two-phase reload, metrics, audit, kernel events, subsystems, the urgent
 //! line, supervised workers, timers, health, and Windows service control.
-//! Measured performance arrives in `0.6`. The public API is in
+//! `0.6` measured every performance target (`docs/PERFORMANCE.md`). The public API is in
 //! `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in the
 //! [repository](https://github.com/jamesgober/system-suite)).
 

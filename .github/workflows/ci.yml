@@ -88,6 +88,16 @@ jobs:
             echo "::endgroup::"
           done
 
+  bench:
+    name: Boot benchmark (no gate on shared runners)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run
+        run: cargo bench --bench boot
+
   loom:
     name: Loom (urgent line, heartbeats)
     runs-on: ubuntu-latest
