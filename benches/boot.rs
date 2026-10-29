@@ -242,10 +242,12 @@ fn read_baseline(path: &Path) -> BTreeMap<String, f64> {
 
 fn main() -> ExitCode {
     // `cargo bench` passes `--bench`; nothing else is accepted.
+    // Memory and idle first, before the repeated boots grow the heap.
+    let first = idle_and_memory();
     let runs = 200;
     let (boot, stop) = boot_and_stop(runs);
     let mut measures = vec![boot, stop, urgent_check(), reader_get()];
-    measures.extend(idle_and_memory());
+    measures.extend(first);
 
     println!("{:<34} {:>14} {:>14}  unit", "measure", "median", "p95");
     for m in &measures {
