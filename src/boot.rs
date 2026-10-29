@@ -512,6 +512,18 @@ impl Parts {
         }
     }
 
+    /// Records how long `step` took (steps 16 and 17 run outside the
+    /// driver).
+    #[cfg(feature = "kernel")]
+    pub(crate) fn record(&mut self, step: Step, took: Duration) {
+        self.timeline.push((step, took));
+    }
+
+    /// The boot timeline: every step that ran, with its duration.
+    pub(crate) fn timeline(&self) -> &[(Step, Duration)] {
+        &self.timeline
+    }
+
     /// Writes the boot timeline: one line per step that ran.
     #[cfg(feature = "log")]
     fn log_timeline(&self) {

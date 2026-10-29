@@ -193,12 +193,17 @@ impl Boot {
     }
 
     fn finish_boot(&mut self) -> Result<(), Error> {
+        let began = std::time::Instant::now();
         let mut registered = std::mem::take(&mut self.registered);
         // A stable sort keeps registration order among equal positions.
         registered.sort_by_key(|subsystem| subsystem.position());
         for subsystem in registered {
             self.start_boxed(subsystem)?;
         }
+        if let Some(parts) = self.parts.as_mut() {
+            parts.record(Step::Subsystems, began.elapsed());
+        }
+        let began = std::time::Instant::now();
         let parts = self.parts.as_ref().ok_or_else(internal)?;
         parts.check_interrupted(Step::Ready)?;
         for callback in std::mem::take(&mut self.on_ready) {
@@ -219,7 +224,11 @@ impl Boot {
             };
             return Err(error.at(Step::Ready));
         }
-        parts.check_interrupted(Step::Ready)
+        parts.check_interrupted(Step::Ready)?;
+        if let Some(parts) = self.parts.as_mut() {
+            parts.record(Step::Ready, began.elapsed());
+        }
+        Ok(())
     }
 }
 

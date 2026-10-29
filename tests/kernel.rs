@@ -1065,3 +1065,24 @@ fn test_t2_a_reload_resolves_again_and_an_older_secret_keeps_its_value() {
     assert_eq!(secret_text(&system, "db.password"), "second");
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
+
+#[test]
+fn test_the_boot_timeline_lists_every_step_in_order() {
+    let root = Root::new("timeline");
+    let journal = Journal::default();
+    let system = quiet("kernel-timeline", &root)
+        .register(Recorder::new("store", Position::FIRST, &journal))
+        .start()
+        .unwrap();
+    let steps: Vec<Step> = system
+        .boot_timeline()
+        .iter()
+        .map(|(step, _)| *step)
+        .collect();
+    assert_eq!(steps.first(), Some(&Step::BuildInfo));
+    assert!(steps.windows(2).all(|pair| pair[0] < pair[1]), "{steps:?}");
+    assert!(steps.contains(&Step::Configuration));
+    assert!(steps.contains(&Step::Subsystems));
+    assert_eq!(steps.last(), Some(&Step::Ready));
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
