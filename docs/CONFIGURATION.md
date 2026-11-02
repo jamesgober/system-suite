@@ -88,6 +88,8 @@ Takes effect at restart.
 | `notify` | string | `"auto"` | `auto` sends systemd notifications when `NOTIFY_SOCKET` is set; `off` never |
 | `reload_signal` | bool | `true` | act on SIGHUP / parameter change (off: received and ignored) |
 | `dump_signal` | bool | `true` | act on SIGUSR1 / control 128 (off: received and ignored) |
+| `memory_watch` | duration | off | how often the memory watermark reads memory, `"100ms"` to `"1h"`; needs the `kernel` and `sys` features |
+| `memory_shed` | integer | `90` | the share of memory used, in percent (1 to 99), that raises the urgent line to `Shed` |
 
 The deadlines change on reload; the rest takes effect at restart.
 

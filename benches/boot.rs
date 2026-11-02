@@ -14,8 +14,8 @@
 //! Times are the median of many runs (p95 printed beside it). The heap a
 //! booted system holds is counted by a counting allocator (this binary
 //! only). Idle CPU and wake-ups are read from `/proc/self` on Linux; on
-//! other platforms they are not measured until sys-lib's live readings are
-//! wired.
+//! other platforms idle CPU comes from sys-lib's process CPU time, and
+//! wake-ups have no reading.
 
 use std::{
     collections::BTreeMap,
@@ -25,7 +25,6 @@ use std::{
     process::ExitCode,
     time::Instant,
 };
-#[cfg(target_os = "linux")]
 use std::{thread, time::Duration};
 
 use std::{
@@ -275,9 +274,52 @@ fn idle_and_memory() -> Vec<Measure> {
     ]
 }
 
+/// The CPU time of the whole process over an idle period (sys-lib; no
+/// reading of wake-ups exists here).
 #[cfg(not(target_os = "linux"))]
 fn idle_and_memory() -> Vec<Measure> {
-    Vec::new()
+    fn cpu_ms() -> f64 {
+        system_suite::sys::process::cpu_time()
+            .expect("cpu time")
+            .total()
+            .as_secs_f64()
+            * 1_000.0
+    }
+
+    let dir = root("idle");
+    write_config(&dir);
+    let system = builder(&dir).start().expect("boot");
+    thread::sleep(Duration::from_millis(500));
+    let before = cpu_ms();
+    thread::sleep(Duration::from_secs(5));
+    let used = cpu_ms() - before;
+    let _code = system.shutdown();
+    let _ = fs::remove_dir_all(&dir);
+    vec![Measure {
+        name: "idle CPU time in 5 s",
+        median: used,
+        p95: used,
+        unit: "ms",
+        gated: false,
+    }]
+}
+
+/// One reading of the memory watermark: pressure and the share used.
+fn memory_reading() -> Measure {
+    let mut samples = Vec::with_capacity(2_000);
+    for _ in 0..2_000 {
+        let start = Instant::now();
+        let pressure = system_suite::sys::mem::pressure();
+        let used = system_suite::sys::mem::used_percent();
+        let took = start.elapsed();
+        black_box((pressure.is_ok(), used.is_ok()));
+        samples.push(took.as_secs_f64() * 1e9);
+    }
+    Measure {
+        // File reads: too noisy for the gate.
+        gated: false,
+        ..summarise("memory watermark reading", samples, "ns")
+    }
 }
 
 fn read_baseline(path: &Path) -> BTreeMap<String, f64> {
@@ -298,7 +340,7 @@ fn main() -> ExitCode {
     first.extend(idle_and_memory());
     let runs = 200;
     let (boot, stop) = boot_and_stop(runs);
-    let mut measures = vec![boot, stop, urgent_check(), reader_get()];
+    let mut measures = vec![boot, stop, urgent_check(), reader_get(), memory_reading()];
     measures.extend(first);
 
     println!("{:<34} {:>14} {:>14}  unit", "measure", "median", "p95");

@@ -1000,12 +1000,14 @@ How the kernel (and, when present, the security package) tells the whole process
 | Level | Raised by | Meaning for a worker at its checkpoint |
 |---|---|---|
 | `Normal` | `set`, or the condition cleared | normal behaviour |
-| `Shed` | `set` (a memory watermark, a supervisor) | refuse low-priority work |
+| `Shed` | `set` (a supervisor), or the memory watermark (`[kernel] memory_watch`, 0.7.1) | refuse low-priority work |
 | `Lockdown` | `set` (the security package) | strict policies only |
 | `Draining` | the kernel, at a stop request | accept no new work; finish what is in flight |
 | `Stopping` | the kernel, after the subsystems stopped or at the deadline | stop now |
 
 `set` changes the level to `Normal`, `Shed`, or `Lockdown` and returns the new epoch. `Draining` and `Stopping` belong to the kernel (`request_stop`), and once a stop is requested the line only moves forward; both cases return `UrgentRefused`. Every change is logged, counted, and published as an `Event`.
+
+The memory watermark (since 0.7.1, D-081) is off until `[kernel] memory_watch` sets how often it reads memory, because each reading wakes a thread and an idle system otherwise wakes nothing. It raises the line from `Normal` to `Shed` when the OS reports memory pressure at `Warning` or above (`sys::mem::pressure`) or the share of memory used reaches `[kernel] memory_shed` (inside a container, the container's limit counts), and clears it after three readings in a row with no pressure and the share at least 5 points below the mark. It only moves the line between those two levels, and only when the line is where it expects: it never lowers a `Lockdown`, never overrides a stop, and leaves a `Shed` someone else set for them to clear. Cost: one reading is about 10 µs on Linux and 2 µs on Windows [measured, `docs/PERFORMANCE.md`], on the timer thread.
 
 | Operation | Cost [est.] |
 |---|---|
@@ -1030,11 +1032,11 @@ loop {
 ```
 
 ```rust,ignore
-// A memory watermark lowers the load, then clears it.
+// A supervisor sheds load, then clears it.
 let line = system.kernel().urgent();
-line.set(Level::Shed, "memory above 90%")?;
+line.set(Level::Shed, "upstream is failing")?;
 // ...
-line.set(Level::Normal, "memory below 80%")?;
+line.set(Level::Normal, "upstream recovered")?;
 ```
 
 ### Health: `Health`, `Status`, `HealthReport`

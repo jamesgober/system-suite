@@ -220,6 +220,11 @@ impl Reloader {
                     || old.kernel.reload_signal != new.kernel.reload_signal
                     || old.kernel.dump_signal != new.kernel.dump_signal,
             ),
+            (
+                "kernel memory watermark",
+                old.kernel.memory_watch != new.kernel.memory_watch
+                    || old.kernel.memory_shed != new.kernel.memory_shed,
+            ),
         ];
         for (section, differs) in changed {
             if differs {

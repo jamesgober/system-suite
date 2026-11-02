@@ -264,6 +264,19 @@ impl UrgentLine {
         true
     }
 
+    /// Moves the line from exactly `from` to `to` and returns the new
+    /// epoch, or `None` when it is anywhere else: the way to change the
+    /// level without overriding what someone else set, a stop included.
+    #[cfg(all(feature = "sys", feature = "kernel"))]
+    pub(crate) fn shift(&self, from: Level, to: Level, reason: &'static str) -> Option<u64> {
+        self.line
+            .word
+            .level
+            .compare_exchange(from as u8, to as u8, Ordering::AcqRel, Ordering::Acquire)
+            .ok()?;
+        Some(self.announce(reason))
+    }
+
     /// Records the reason, bumps the epoch, and delivers the notice to
     /// every mailbox and the observer.
     fn announce(&self, reason: &'static str) -> u64 {

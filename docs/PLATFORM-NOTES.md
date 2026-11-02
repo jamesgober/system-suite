@@ -68,4 +68,10 @@ Deadlines, timers, and backoff use the OS monotonic clock everywhere. Timer reso
 
 ## Memory pressure
 
-The urgent line's memory watermark (raising it to `Shed` under pressure) needs sys-lib 0.4's `mem::pressure()`; it is not wired in 0.5 (see the roadmap).
+The urgent line's memory watermark (`[kernel] memory_watch`, off by default) reads sys-lib's `mem::pressure()` and `mem::used_percent()`.
+
+| Platform | Pressure comes from | Notes |
+|---|---|---|
+| Linux | pressure stall information (`/proc/pressure/memory`, or the cgroup's) | `None` on a kernel without it; the share used still applies. Inside a container the share is of the container's limit |
+| macOS | `kern.memorystatus_vm_pressure_level` | |
+| Windows | the low-memory resource notification | only ever reports the OS's own low-memory state; the share used covers the rest. A job object's limit counts as the total |

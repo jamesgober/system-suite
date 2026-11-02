@@ -26,18 +26,18 @@ Machine: AMD Ryzen 9 9950X3D (16 cores). Linux: Ubuntu under WSL2, kernel 6.6.87
 |---|---|---|---|
 | boot to ready, default members, local configuration file, log file on | under 5 ms | 0.078 ms / 0.114 ms | 0.31 ms / 0.38 ms |
 | stop to exit, nothing in flight | under 50 ms | 0.16 ms / 0.21 ms | 0.20 ms / 0.28 ms |
-| idle CPU, a booted system, 5 s | 0 | 0 ticks, 0 context switches | not measured in 0.6 (needs sys-lib 0.4) |
+| idle CPU, a booted system, 5 s | 0 | 0 ticks, 0 context switches | 0.0 ms of CPU time (0.7.1); wake-ups have no reading |
 | urgent-line check (`Watch::changed`, nothing changed) | about 1 ns | 0.20 ns | 0.19 ns |
 | snapshot read (`Reader::get`, unchanged) | about 1 ns | 0.35 ns | 0.30 ns |
 | heap held by a booted system | under 256 KiB | 98 KiB | 99 KiB |
 
-Every target is met. The measured boot is with `process_wide(false)` and no single-instance lock, so it leaves out the signal intake and the lock; both are one system call each and a thread start.
+Measured again for 0.7.1 on a busy machine: 0.6.0 and 0.7.1, run alternately, could not be told apart, so the baselines stand. macOS has no reference machine; CI runs the benchmark there on every push, without a gate. Every target is met. The measured boot is with `process_wide(false)` and no single-instance lock, so it leaves out the signal intake and the lock; both are one system call each and a thread start.
 
 ## How it is measured
 
 - **Times** are the median of 200 boots (each followed by a shutdown) and of 21 rounds of 10 million checkpoint reads; p95 is printed beside each median.
 - **Heap** is the live bytes a booted system holds, counted by a counting allocator in the benchmark binary (the library itself forbids `unsafe`, D-069), on a second boot so lazy statics from the first do not count.
-- **Idle CPU** is the process's user and system ticks (`/proc/self/stat`) and the context switches of all its threads (`/proc/self/task/*/status`) over 5 s of a booted, idle system, after it settled for 0.5 s. Zero switches means no thread of the suite woke at all: the signal intake blocks on the OS, the timer thread waits with no timeout when nothing is due, workers park.
+- **Idle CPU** on Linux is the process's user and system ticks (`/proc/self/stat`) and the context switches of all its threads (`/proc/self/task/*/status`) over 5 s of a booted, idle system, after it settled for 0.5 s. On Windows and macOS it is the process's CPU time over the same period (sys-lib's `process::cpu_time`); it shows no CPU used, but its resolution is coarse (often 15.6 ms on Windows), and neither OS has a wake-up reading in sys-lib. Zero switches means no thread of the suite woke at all: the signal intake blocks on the OS, the timer thread waits with no timeout when nothing is due, workers park.
 - The harness uses the standard library only (D-068): criterion would bring `serde_json` and `regex`, which are held until first-party crates cover them.
 
 ## The regression gate
@@ -55,6 +55,7 @@ SYSTEM_SUITE_BENCH_WRITE=benches/baseline/linux-x86_64.txt cargo bench --bench b
 | Operation | Cost | Where |
 |---|---|---|
 | a reload | the file read and parse, plus each subsystem's preparation | `System::reload` |
+| one memory watermark reading | 10 µs on Linux, 1.9 µs on Windows (medians); at `memory_watch = "5s"`, about 2 parts per million of one core and 0.2 wake-ups per second | only with `[kernel] memory_watch` set |
 | `AuditLog::record` with `sync = "every"` | one `fdatasync` (milliseconds on rotating disks, tens of microseconds on NVMe) | per record |
 | `Secret::with` | key-vault's read path (defragment into a wiped scratch buffer) | per read |
 | `System::health` | one `Vec` and the reasons; `status` allocates nothing of its own | per call |

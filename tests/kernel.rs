@@ -804,6 +804,36 @@ fn test_a_cut_audit_tail_fails_until_repair_is_allowed() {
     assert_eq!(kept.len(), 1, "the cut bytes were not kept");
 }
 
+/// Every machine uses more than 1% of its memory.
+#[cfg(feature = "sys")]
+#[test]
+fn test_the_memory_watermark_raises_the_line_to_shed() {
+    let root = Root::new("watermark");
+    let file = root.write_config("[kernel]\nmemory_watch = \"100ms\"\nmemory_shed = 1\n");
+    let system = quiet("kernel-watermark", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    let urgent = system.kernel().urgent();
+    let end = Instant::now() + Duration::from_secs(10);
+    while urgent.level() == Level::Normal && Instant::now() < end {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(urgent.level(), Level::Shed);
+    assert_eq!(urgent.notice().reason, "memory above the watermark");
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[test]
+fn test_no_memory_timer_runs_unless_asked_for() {
+    let root = Root::new("nowatermark");
+    let system = quiet("kernel-nowatermark", &root).start().unwrap();
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(system.kernel().urgent().level(), Level::Normal);
+    assert_eq!(system.kernel().urgent().epoch(), 0);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
 #[cfg(feature = "secrets")]
 #[test]
 fn test_disabled_secrets_still_refuse_references() {

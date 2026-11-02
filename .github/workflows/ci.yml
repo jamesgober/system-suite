@@ -89,8 +89,12 @@ jobs:
           done
 
   bench:
-    name: Boot benchmark (no gate on shared runners)
-    runs-on: ubuntu-latest
+    name: Boot benchmark, ${{ matrix.os }} (no gate on shared runners)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

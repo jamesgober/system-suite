@@ -512,6 +512,54 @@ impl Parts {
         }
     }
 
+    /// Starts the memory watermark when `[kernel] memory_watch` asks for
+    /// it (D-081). Off by default: a reading wakes a thread, and an idle
+    /// system otherwise wakes nothing.
+    #[cfg(all(feature = "kernel", feature = "sys"))]
+    pub(crate) fn start_memory_watch(&self) {
+        use crate::kernel::memory::{self, Watermark};
+
+        let Some(period) = self.sections.kernel.memory_watch else {
+            return;
+        };
+        if self.settings.is_disabled(Member::Sys) {
+            self.log.warn(
+                "the memory watermark needs the sys member; it is not running",
+                &[],
+            );
+            return;
+        }
+        let kernel = self.kernel.clone();
+        let log = self.log.clone();
+        let mut mark = Watermark::new(self.sections.kernel.memory_shed);
+        let mut failing = false;
+        let started = self
+            .kernel
+            .runtime()
+            .every("memory-watermark", period, move || match memory::read() {
+                Ok(reading) => {
+                    failing = false;
+                    mark.step(reading, kernel.urgent());
+                }
+                // Logged once per outage: at this rate it would flood the
+                // log. The line stays where it is.
+                Err(error) if !failing => {
+                    failing = true;
+                    log.warn(
+                        "memory could not be read; the watermark holds the line",
+                        &[("error", Val::Str(&error.to_string()))],
+                    );
+                }
+                Err(_) => {}
+            });
+        if let Err(error) = started {
+            self.log.warn(
+                "the memory watermark could not be started",
+                &[("error", Val::Str(&error.to_string()))],
+            );
+        }
+    }
+
     /// Records how long `step` took (steps 16 and 17 run outside the
     /// driver).
     #[cfg(feature = "kernel")]

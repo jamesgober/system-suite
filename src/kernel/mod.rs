@@ -29,6 +29,8 @@ pub(crate) mod crash;
 #[cfg(feature = "registry")]
 mod events;
 mod health;
+#[cfg(feature = "sys")]
+pub(crate) mod memory;
 pub(crate) mod metrics;
 pub(crate) mod notify;
 #[cfg(feature = "signals")]
