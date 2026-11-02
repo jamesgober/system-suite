@@ -76,7 +76,15 @@ impl SignalIntake {
             .name("system-suite-signals".to_owned())
             .spawn(move || {
                 while let Some(signal) = subscription.recv_blocking() {
-                    handle(signal, stop, &kernel, &log, &thread_actions);
+                    // A panic in a handler (application code reached from a
+                    // dump or a reload) must not end the intake: stop
+                    // signals would then be ignored.
+                    let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle(signal, stop, &kernel, &log, &thread_actions);
+                    }));
+                    if handled.is_err() {
+                        log.error("a signal handler panicked; the intake goes on", &[]);
+                    }
                 }
             });
         let thread = match spawned {

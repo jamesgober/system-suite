@@ -1,10 +1,11 @@
 //! Crash capture: the panic hook (boot step 11).
 //!
 //! On a panic anywhere in the process the hook logs the panic, flushes the
-//! logger (with a short bound, so a stuck sink cannot hold the process),
-//! writes an owner-only crash report to the log directory, and then runs
-//! the hook that was installed before it, so the process ends as the
-//! application's profile decides (threats T5 and T9).
+//! logger and syncs the audit chain (each with a short bound, so a stuck
+//! sink cannot hold the process), writes an owner-only crash report to the
+//! log directory, and then runs the hook that was installed before it, so
+//! the process ends as the application's profile decides (threats T5 and
+//! T9).
 
 use std::{
     fs,
@@ -45,11 +46,16 @@ pub(crate) struct CrashSettings {
 struct CrashState {
     settings: CrashSettings,
     reports: AtomicU32,
+    /// The audit chain, opened at step 13, after the hook (step 11).
+    #[cfg(feature = "audit")]
+    audit: std::sync::OnceLock<crate::AuditLog>,
 }
 
 /// The installed hook. Uninstalling it puts the previous hook back.
 pub(crate) struct CrashHook {
     previous: Arc<Mutex<Option<PanicHook>>>,
+    #[cfg(feature = "audit")]
+    state: Arc<CrashState>,
 }
 
 impl CrashHook {
@@ -60,16 +66,32 @@ impl CrashHook {
         let state = Arc::new(CrashState {
             settings,
             reports: AtomicU32::new(0),
+            #[cfg(feature = "audit")]
+            audit: std::sync::OnceLock::new(),
         });
+        #[cfg(feature = "audit")]
+        let hook_state = Arc::clone(&state);
+        #[cfg(not(feature = "audit"))]
+        let hook_state = state;
         let chained = Arc::clone(&previous);
         panic::set_hook(Box::new(move |info| {
-            capture(&state, info);
+            capture(&hook_state, info);
             let previous = chained.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(hook) = previous.as_ref() {
                 hook(info);
             }
         }));
-        CrashHook { previous }
+        CrashHook {
+            previous,
+            #[cfg(feature = "audit")]
+            state,
+        }
+    }
+
+    /// Gives the hook the audit chain to sync on a panic (step 13).
+    #[cfg(feature = "audit")]
+    pub(crate) fn set_audit(&self, audit: crate::AuditLog) {
+        let _first = self.state.audit.set(audit).is_ok();
     }
 
     /// Removes the hook and puts the previous one back. During a panic the
@@ -101,6 +123,10 @@ fn capture(state: &CrashState, info: &PanicHookInfo<'_>) {
     let thread_name = current.name().unwrap_or("unnamed").to_owned();
 
     log_panic(&state.settings.log, &message, &location, &thread_name);
+    #[cfg(feature = "audit")]
+    if let Some(audit) = state.audit.get() {
+        sync_audit(audit.clone());
+    }
 
     let count = state.reports.fetch_add(1, Ordering::Relaxed);
     if count >= state.settings.max_reports {
@@ -112,10 +138,7 @@ fn capture(state: &CrashState, info: &PanicHookInfo<'_>) {
     let report = render(&state.settings, &message, &location, &thread_name);
     if let Err(error) = write_report(dir, &report_name(&state.settings, count), &report) {
         // The hook cannot return an error; the log is the only place left.
-        state.settings.log.error(
-            "crash report could not be written",
-            &[("error", Val::Str(&error.to_string()))],
-        );
+        report_failure(&state.settings.log, &error.to_string());
     }
 }
 
@@ -164,6 +187,44 @@ fn log_panic(log: &LogSlot, message: &str, location: &str, thread_name: &str) {
     if spawned.is_ok() {
         // A timeout means the logger is stuck; the report is still written.
         let _flushed = finished.recv_timeout(FLUSH_BOUND);
+    }
+}
+
+/// Logs that the crash report could not be written, on a helper thread
+/// with the same bound as the panic line: if the panic happened inside a
+/// log sink, logging on this thread would wait forever.
+fn report_failure(log: &LogSlot, error: &str) {
+    let (log, error) = (log.clone(), error.to_owned());
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let spawned = thread::Builder::new()
+        .name("system-suite-crash-log".to_owned())
+        .spawn(move || {
+            log.error(
+                "crash report could not be written",
+                &[("error", Val::Str(&error))],
+            );
+            let _delivered = done.send(());
+        });
+    if spawned.is_ok() {
+        let _logged = finished.recv_timeout(std::time::Duration::from_secs(1));
+    }
+}
+
+/// Syncs the audit chain on a helper thread and waits at most one second:
+/// if the panic happened while this thread held the chain (inside
+/// `record`), syncing here would wait forever.
+#[cfg(feature = "audit")]
+fn sync_audit(audit: crate::AuditLog) {
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let spawned = thread::Builder::new()
+        .name("system-suite-crash-audit".to_owned())
+        .spawn(move || {
+            // A sync error has nowhere to go from inside the panic hook.
+            let _synced = audit.sync();
+            let _delivered = done.send(());
+        });
+    if spawned.is_ok() {
+        let _synced = finished.recv_timeout(std::time::Duration::from_secs(1));
     }
 }
 

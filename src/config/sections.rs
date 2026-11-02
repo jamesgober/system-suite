@@ -137,6 +137,25 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
 
     s.kernel.shutdown_deadline = config.get("kernel.shutdown_deadline")?;
     s.kernel.member_reserve = config.get("kernel.member_reserve")?;
+    // Checked here so a reload is held to the same rules as the boot.
+    let deadline = s
+        .kernel
+        .shutdown_deadline
+        .unwrap_or(crate::builder::DEFAULT_SHUTDOWN_DEADLINE);
+    if deadline.is_zero() || deadline > crate::builder::MAX_SHUTDOWN_DEADLINE {
+        return Err(invalid(
+            "`kernel.shutdown_deadline` must be more than zero and at most one hour",
+            "set `kernel.shutdown_deadline` to a duration from \"1ms\" to \"1h\"",
+        ));
+    }
+    if let Some(reserve) = s.kernel.member_reserve
+        && reserve >= deadline
+    {
+        return Err(invalid(
+            "`kernel.member_reserve` must be shorter than the shutdown deadline",
+            "set `kernel.member_reserve` below `kernel.shutdown_deadline`",
+        ));
+    }
     if let Some(notify) = config.get::<String>("kernel.notify")? {
         s.kernel.notify = match notify.as_str() {
             "auto" => true,
@@ -149,6 +168,18 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
 
     s.ids.worker = bounded(config, "ids.worker", s.ids.worker, 0, 1_023)?;
     s.ids.epoch_ms = config.get("ids.epoch")?;
+    if let Some(epoch) = s.ids.epoch_ms {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        if epoch > now {
+            return Err(invalid(
+                "`ids.epoch` is in the future: Snowflake ids would stall",
+                "set `ids.epoch` to a past time in milliseconds since 1970",
+            ));
+        }
+    }
 
     s.audit.enabled = config.get_or("audit.enabled", s.audit.enabled)?;
     s.audit.file = config.get("audit.file")?;
@@ -254,6 +285,10 @@ mod tests {
             "[ids]\nworker = 2000\n",
             "[guard]\numask = \"999\"\n",
             "[kernel]\nnotify = \"maybe\"\n",
+            "[kernel]\nshutdown_deadline = \"0s\"\n",
+            "[kernel]\nshutdown_deadline = \"2h\"\n",
+            "[kernel]\nshutdown_deadline = \"5s\"\nmember_reserve = \"5s\"\n",
+            "[ids]\nepoch = 99999999999999\n",
             "log = 3\n",
         ] {
             let error = sections(text).err();

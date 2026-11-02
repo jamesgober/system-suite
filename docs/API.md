@@ -94,11 +94,11 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
 
 ```toml
 [dependencies]
-system-suite = "0.6"
+system-suite = "0.7"
 
 [build-dependencies]
 # Only for build info (the build commit, time, and profile in the first log line).
-system-suite = { version = "0.6", default-features = false, features = ["sys"] }
+system-suite = { version = "0.7", default-features = false, features = ["sys"] }
 ```
 
 ```rust,ignore
@@ -439,6 +439,17 @@ impl<T: Send + Sync + 'static> Snapshot<T> {
     pub fn reader(&self) -> Reader<T>;
 }
 impl<T> Clone for Snapshot<T>;                // cheap: shares the same slot
+impl<T: Send + Sync + 'static> Snapshot<T> {
+    pub fn view(&self) -> SnapshotView<T>;    // since 0.7
+}
+
+pub struct SnapshotView<T> { /* the snapshot, without publish */ }   // since 0.7
+impl<T: Send + Sync + 'static> SnapshotView<T> {
+    pub fn load(&self) -> std::sync::Arc<T>;
+    pub fn version(&self) -> u64;
+    pub fn reader(&self) -> Reader<T>;
+}
+impl<T> Clone for SnapshotView<T>;
 
 pub struct Reader<T> { /* the snapshot, the version seen, the cached Arc */ }
 impl<T: Send + Sync + 'static> Reader<T> {
@@ -447,7 +458,7 @@ impl<T: Send + Sync + 'static> Reader<T> {
 }
 ```
 
-A value that is read on every request and replaced whole on a reload: profiles, compiled rules, budgets, and the configuration itself. `publish` swaps in a complete new value in one step; readers already holding the old one keep it until their next `get`, and the old value is freed when the last reader moves on. One `Reader` per worker thread: `get` is one atomic load and a compare when nothing changed, and a short lock plus an `Arc` clone only right after a publish.
+A value that is read on every request and replaced whole on a reload: profiles, compiled rules, budgets, and the configuration itself. `publish` swaps in a complete new value in one step; readers already holding the old one keep it until their next `get`, and the old value is freed when the last reader moves on. One `Reader` per worker thread: `get` is one atomic load and a compare when nothing changed, and a short lock plus an `Arc` clone only right after a publish. A `SnapshotView` hands out the value, the version, and readers, but cannot publish: the configuration's snapshot is handed out this way, so only a reload (validated, all or nothing) replaces it (D-074).
 
 | Operation | Cost [est.] |
 |---|---|
@@ -673,7 +684,7 @@ impl Builder {
 |---|---|
 | `Env`, `Config` (defaults only), `Log` (no sinks; crash reports keep no lines), `Metrics`, `Signals`, `Audit`, `Registry`, `Globals`, `Secrets` | `Kernel`, `Sys`, `Paths`, `Time`, `Ids`, `Rand` (they hold no run-time state to turn off) |
 
-`process_wide(false)`: see [Process-wide state](#process-wide-state). `crash_capture(false)` leaves the panic hook alone (D-016 explains the default). `single_instance(false)` takes no lock (the same as `[guard] lock = false`); use it when a supervisor holds the lock or when several copies are meant to run.
+`process_wide(false)`: see [Process-wide state](#process-wide-state). `crash_capture(false)` leaves the panic hook alone (D-016 explains the default). At shutdown the suite puts back the hook that was installed before boot, so a hook the application installs after boot is replaced then; install it before boot (the suite's hook calls it after writing the report), or turn crash capture off. `single_instance(false)` takes no lock (the same as `[guard] lock = false`); use it when a supervisor holds the lock or when several copies are meant to run.
 
 ```rust,ignore
 // A command-line tool: several copies may run, no metrics, no audit.
@@ -792,7 +803,7 @@ The typed handles of every enabled member, built once at boot. It is what a fram
 | `paths(&self)` | `&path::App` | `paths` | 0.3 |
 | `env(&self)` | `&env::Env` | `env` | 0.3 |
 | `config(&self)` | `config::Config` (the current snapshot; cheap clone) | `config` | 0.4 |
-| `config_snapshot(&self)` | `&Snapshot<config::Config>` (for a per-thread `Reader`) | `config` | 0.4 |
+| `config_snapshot(&self)` | `&SnapshotView<config::Config>` (for a per-thread `Reader`; read-only since 0.7, D-074) | `config` | 0.4 |
 | `log(&self)` | `&log::Logger` | `log` | 0.3 |
 | `metrics(&self)` | `&metrics::MetricsCore` | `metrics` | 0.4 |
 | `clock(&self)` | `&dyn clock::Clock` | `time` | 0.3 |
@@ -1614,8 +1625,9 @@ Configuration holds references, never secrets (FR-16, threat T2). A value of the
 | `env:NAME` | the process environment, then the `.env` file (env-lib) | unset or empty |
 | `file:/path` | the file's contents, trailing newline removed (key-vault's file fetcher) | missing, over 64 KiB, or on Unix group- or world-readable, or not owned by the service user |
 | `vault:name` | a key the application registered in the vault before boot step 8 (`Builder::on_vault`, 0.5) | no such name |
+| any, inside a list | - | always (0.7): an element has no key of its own; give each secret its own key |
 
-A key whose last segment marks a secret (`password`, `passwd`, `secret`, `token`, `api_key`, `private_key`, `credentials`, and the rest of log-io's list of common secret keys) must hold a reference; a plain value is refused with `PlainSecret` unless `[secrets] allow_plain = true`. Without the `secrets` feature, any reference is refused with `Secret` ("enable the secrets feature"), so a reference is never mistaken for a literal password.
+A key whose last segment marks a secret (`password`, `passwd`, `secret`, `token`, `api_key`, `private_key`, `credentials`, and the rest of log-io's list of common secret keys) must hold a reference; a plain value is refused with `PlainSecret` unless `[secrets] allow_plain = true`. Without the `secrets` feature, or with `Member::Secrets` disabled, any reference is refused with `Secret` ("enable the secrets feature"), so a reference is never mistaken for a literal password.
 
 ```rust,ignore
 // site.conf:  [database]  password = "file:/run/secrets/db_password"
@@ -1674,7 +1686,7 @@ impl AuditLog {
 }
 ```
 
-The application's tamper-evident record of privileged actions (REPS: who did what and when, without sensitive content). The chain file is opened at boot step 13, every existing record is verified, and appending continues at the tail; a chain that fails verification stops the boot with `AuditTampered`. `record` appends one hash-linked record; with `[audit] sync = "every"` (the default) it is on disk before `record` returns. The kernel records its own privileged actions here (a reload, an urgent-line change to `Lockdown`, a stop request with its reason).
+The application's tamper-evident record of privileged actions (REPS: who did what and when, without sensitive content). The chain file is opened at boot step 13, every existing record is verified, and appending continues at the tail; a chain that fails verification stops the boot with `AuditTampered`. `record` appends one hash-linked record; with `[audit] sync = "every"` (the default) it is on disk before `record` returns. The kernel records its own privileged actions here (a reload, an urgent-line change to `Lockdown`, a stop request with its reason). Since 0.7 the chain's tail is anchored outside the chain file (`<state dir>/audit/<name>.anchor`, owner-only, rewritten after every sync): a chain cut short or replaced since the last sync is refused with `AuditTampered`, and an existing chain file another user can change is refused with `ConfigInsecure` (D-072, D-078). A panic syncs the chain before the process ends.
 
 Cost [est.]: `record` 1 to 3 µs plus one `fdatasync` with `sync = "every"`; with `sync = "flush"` records are synced at shutdown and every second.
 

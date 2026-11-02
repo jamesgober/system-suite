@@ -51,6 +51,8 @@ fn child() {
         "env-file-missing" => env_file_missing(&root),
         "panic" => panic_after_boot(&root),
         "reload-watch" => reload_watch(&root),
+        "worker-panic" => worker_panic(&root),
+        "slow-boot" => slow_boot(&root),
         #[cfg(feature = "log-bridge")]
         "log-bridge" => log_bridge(&root),
         #[cfg(feature = "globals")]
@@ -182,6 +184,86 @@ fn globals(_root: &Path) -> u8 {
     );
     println!("GLOBALS OK");
     0
+}
+
+/// Boots, runs a worker that panics once and is restarted, and shuts down.
+fn worker_panic(_root: &Path) -> u8 {
+    use system_suite::{lifecycle::Failure, runtime::Worker};
+
+    let system = match System::builder(&name()).start() {
+        Ok(system) => system,
+        Err(error) => return report(&error),
+    };
+    let first = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let worker = Worker::new("flaky-worker")
+        .backoff(system_suite::runtime::Backoff::Fixed(
+            Duration::from_millis(5),
+        ))
+        .spawn(system.runtime(), move |ctx| -> Result<(), Failure> {
+            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                panic!("the worker lost its database");
+            }
+            while !ctx.should_stop() {
+                ctx.park(Some(Duration::from_millis(20)));
+            }
+            Ok(())
+        })
+        .expect("spawn");
+    let began = Instant::now();
+    while worker.restarts() < 1 && began.elapsed() < Duration::from_secs(10) {
+        thread::sleep(Duration::from_millis(5));
+    }
+    system_suite::log::info!(system.log(), "worker survived its panic");
+    let _code = system.shutdown();
+    println!("WORKER RESTARTED {}", worker.restarts());
+    0
+}
+
+/// A subsystem whose `start` waits for the parent: the parent sends a stop
+/// signal while the boot is at step 16.
+struct Slow(PathBuf);
+
+impl system_suite::lifecycle::Subsystem for Slow {
+    fn name(&self) -> &str {
+        "slow"
+    }
+    fn start(
+        &mut self,
+        _link: &system_suite::lifecycle::Link,
+    ) -> Result<(), system_suite::lifecycle::Failure> {
+        println!("STARTING");
+        let go = self.0.join("go");
+        let began = Instant::now();
+        while !go.exists() && began.elapsed() < Duration::from_secs(30) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
+    }
+    fn stop(
+        &mut self,
+        _deadline: system_suite::lifecycle::Deadline,
+    ) -> Result<(), system_suite::lifecycle::Failure> {
+        fs::write(self.0.join("stopped"), "yes").expect("stopped marker");
+        Ok(())
+    }
+}
+
+fn slow_boot(root: &Path) -> u8 {
+    match System::builder(&name())
+        .register(Slow(root.to_path_buf()))
+        .start()
+    {
+        Ok(system) => {
+            println!("BOOTED");
+            let _code = system.shutdown();
+            1
+        }
+        Err(error) if error.kind() == ErrorKind::Interrupted => {
+            println!("INTERRUPTED");
+            0
+        }
+        Err(error) => report(&error),
+    }
 }
 
 fn exit_value(kind: ErrorKind) -> u8 {
@@ -514,6 +596,76 @@ fn test_foundation_is_published_while_running() {
     let output = scenario.run("globals");
     assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
     assert!(text(&output.stdout).contains("GLOBALS OK"));
+}
+
+#[test]
+fn test_t5_a_worker_panic_leaves_a_report_and_the_worker_restarts() {
+    let scenario = Scenario::new("it-workerpanic");
+    let output = scenario.run("worker-panic");
+    assert_eq!(code(&output), Some(0), "{}", text(&output.stderr));
+    assert!(
+        text(&output.stdout).contains("WORKER RESTARTED 1"),
+        "{}",
+        text(&output.stdout)
+    );
+    let logs = scenario.dir("logs");
+    let log = log_text(&logs, "it-workerpanic");
+    assert!(log.contains("the worker lost its database"), "{log}");
+    assert!(log.contains("worker restarted"), "{log}");
+    assert!(log.contains("worker survived its panic"), "{log}");
+    let reports = fs::read_dir(&logs)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("crash-"))
+        .count();
+    assert_eq!(reports, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_t8_sigterm_during_boot_unwinds() {
+    let scenario = Scenario::new("it-slowboot");
+    let mut child = scenario
+        .command("slow-boot")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (sender, lines) = std::sync::mpsc::channel::<String>();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { return };
+            if sender.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let next = |want: &str| loop {
+        match lines.recv_timeout(WAIT) {
+            Ok(line) if line.trim_end().ends_with(want) => return,
+            Ok(_) => {}
+            Err(_) => panic!("no {want} line from the child"),
+        }
+    };
+    next("STARTING");
+    let status = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // Give the signal thread a moment to record the stop, then let the
+    // subsystem's start return; the boot must stop at the next boundary.
+    thread::sleep(Duration::from_millis(200));
+    fs::write(scenario.root.join("go"), "go").unwrap();
+    next("INTERRUPTED");
+    assert_eq!(wait(&mut child).code(), Some(0));
+    assert!(
+        scenario.root.join("stopped").exists(),
+        "the subsystem that started was not stopped"
+    );
+    let log = log_text(&scenario.dir("logs"), "it-slowboot");
+    assert!(log.contains("SIGTERM"), "{log}");
 }
 
 #[cfg(windows)]

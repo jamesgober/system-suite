@@ -102,6 +102,73 @@ impl<T: Send + Sync + 'static> Snapshot<T> {
     }
 }
 
+impl<T: Send + Sync + 'static> Snapshot<T> {
+    /// A read-only view: the current value, the version, and readers, but
+    /// no `publish`. What a snapshot's owner hands out when only it may
+    /// replace the value.
+    #[must_use]
+    pub fn view(&self) -> SnapshotView<T> {
+        SnapshotView {
+            snapshot: self.clone(),
+        }
+    }
+}
+
+/// A read-only handle to a [`Snapshot`]: [`load`](Self::load),
+/// [`version`](Self::version), and [`reader`](Self::reader), never
+/// `publish`. The configuration's snapshot is handed out this way, so only
+/// a reload (validated, all or nothing) replaces it (D-074).
+///
+/// # Examples
+///
+/// ```
+/// use system_suite::Snapshot;
+///
+/// let limits = Snapshot::new(100_u32);
+/// let view = limits.view();
+/// let mut reader = view.reader();
+/// let _version = limits.publish(150);
+/// assert_eq!(*reader.get(), 150);
+/// assert_eq!(*view.load(), 150);
+/// ```
+pub struct SnapshotView<T> {
+    snapshot: Snapshot<T>,
+}
+
+impl<T: Send + Sync + 'static> SnapshotView<T> {
+    /// The current value.
+    #[must_use]
+    pub fn load(&self) -> Arc<T> {
+        self.snapshot.load()
+    }
+
+    /// The current version (1 for the first value, +1 per publish).
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.snapshot.version()
+    }
+
+    /// A reader for one thread.
+    #[must_use]
+    pub fn reader(&self) -> Reader<T> {
+        self.snapshot.reader()
+    }
+}
+
+impl<T> Clone for SnapshotView<T> {
+    fn clone(&self) -> Self {
+        SnapshotView {
+            snapshot: self.snapshot.clone(),
+        }
+    }
+}
+
+impl<T> fmt::Debug for SnapshotView<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SnapshotView").finish_non_exhaustive()
+    }
+}
+
 impl<T> Clone for Snapshot<T> {
     fn clone(&self) -> Self {
         Snapshot {

@@ -72,8 +72,14 @@ Exit: every target in `PLAN.md` section 13 measured and published.
 
 ## v0.7.0 - Hardening
 Exit: no open finding; every threat has a passing attack test.
-- [ ] Attack tests T1 to T9 complete; `docs/SECURITY.md` with the cost of each defence.
-- [ ] Soak: 8 hours of start, reload, and stop cycles with no growth in memory, descriptors, or threads.
+- [x] Attack tests T1 to T9 complete; `docs/SECURITY.md` with the cost of each defence. New in 0.7: T3 for the audit chain and its anchor, T5 for a panicking worker, T8 with a real SIGTERM while a subsystem starts.
+- [x] Security review of the whole suite: every finding fixed (D-072 to D-078), the rest recorded below as documented limits.
+- [x] Soak: 8 hours of start, reload, and stop cycles with no growth in memory, descriptors, or threads. Done 2026-10-29 on Linux (WSL 2): 251,225 cycles; heap, descriptors, and threads the same at the end as at the start (`tests/soak.rs`).
+- Documented limit (D-079): `.env` values (secrets referenced as `env:NAME` among them) stay in env-lib's map in ordinary memory for the life of the process. Reason: the same exposure as the process environment, which holds `env:` values in plain memory and which the suite never changes (`std::env::remove_var` is unsafe); a secret that must be wiped belongs in a `file:` or `vault:` reference.
+- Documented limit (D-079): on Unix the owner check needs the current user's id, read through sys-lib; without the `sys` feature, or when sys-lib's user lookup fails, only the mode check (no group or other write bit) applies. Reason: reading the id needs an OS call, which belongs in sys-lib (`#![forbid(unsafe_code)]`); sys-lib 0.4 is being built in another session, and a `process::uid()` that never consults the user database is a request for it. The directories' own owner-only permissions still apply.
+- Documented limit (D-079): the crash hook, removed at shutdown, puts back the hook that was installed before boot; a panic hook the application installed after boot is replaced by that earlier one. Reason: the standard library keeps one process-wide panic hook and gives no way to tell whose it is; an application that installs its own hook after boot is told so in `docs/API.md`.
+- Documented limit (D-079): process-wide members set once (log-io's global logger, metrics-lib's global registry) stay installed after a boot that failed after setting them. Reason: the members allow setting them once only; the process exits after a failed boot in every documented use, and a test uses `process_wide(false)`.
+- Documented limit (D-079): event handlers run on the thread that tears down, outside the shutdown deadline. Reason: they are the application's code, documented to return quickly; bounding each one would cost a thread per event.
 
 ## v0.8.0 - Alpha
 Exit: two real consumers boot on it on every listed environment.
@@ -85,6 +91,15 @@ Exit: two weeks without an API change; every document checked against the build;
 - [ ] **James's pre-1.0 review**, before the API is frozen: the API, the workflow, and anything he wants added before 1.0. Whatever he adds goes into this roadmap (into 0.9 or a new milestone before 1.0) with its exit criteria; 1.0 waits for it.
 - [ ] API frozen; `0.9.x` only fixes.
 - [ ] `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.
+
+## v0.9.x - Pre-1.0 polish (before any 1.0 release candidate)
+James's standing rule (2026-10-29, D-080): go back and fix every issue and tune the performance before getting close to release.
+Exit: nothing below is open without a recorded, hard reason; what is still open is listed in the 1.0 readiness note for James.
+- [ ] Every accepted gap, deferred item, known issue, and blocker revisited: the urgent line's memory watermark (sys-lib 0.4.0), the held features (`config-json`, `config-xml`, `config-validation`, `metrics-json`, `metrics-otlp`, `metrics-system`), idle CPU and wake-up readings on Windows and macOS (sys-lib 0.4), the documented limits of D-079, and every "Moved" line in this roadmap. Each one is fixed, or kept with its reason restated.
+- [ ] A fresh performance tuning pass: profile boot, stop, reload, and the request-path reads again on Linux, macOS, and Windows; act on what it finds; update `docs/PERFORMANCE.md` and the baselines.
+- [ ] The security and edge-case review run again over the whole suite (the 0.7 review's method), every finding fixed or recorded.
+- [ ] The same pass for each member release made for the suite (fix, tune, review before it is published).
+- [ ] The 1.0 readiness note for James: what is done, what is still open and why, and what 1.0 would promise.
 
 ## v1.0.0 - Stable
 Exit: the audit passes, the definition of done in `DIRECTIVES.md` holds, and James approves.

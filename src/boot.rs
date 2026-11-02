@@ -240,8 +240,8 @@ impl Parts {
                 .max(Instant::now());
             for late in self.kernel.runtime().stop(workers_deadline) {
                 self.log.error(
-                    "worker did not stop by the deadline and was abandoned",
-                    &[("worker", Val::Str(&late))],
+                    "a runtime thread did not stop by the deadline and was abandoned",
+                    &[("thread", Val::Str(&late))],
                 );
                 code = crate::exit::DEADLINE;
             }
@@ -836,14 +836,13 @@ fn step_environment(parts: &mut Parts) -> Result<(), Error> {
             None => None,
         }
     };
+    // Read once, checked on the opened file, then parsed from the text
+    // (D-073): the file checked is the file read.
     let env = match &path {
-        Some(path) => {
-            if path.is_file() {
-                crate::secure_file::check(path, "environment file")?;
-            }
-            env_lib::Env::open(path)
+        Some(path) if path.exists() => {
+            env_lib::Env::from_text(&crate::secure_file::read_env_file(path)?)
         }
-        None => Ok(env_lib::Env::new()),
+        _ => Ok(env_lib::Env::new()),
     };
     let env = env.and_then(|env| env.with_prefix(&prefix)).map_err(|e| {
         Error::new(
@@ -1071,16 +1070,20 @@ fn step_secrets(parts: &mut Parts) -> Result<(), Error> {
         #[cfg(feature = "env")]
         parts.env.clone(),
     ));
-    if !parts.settings.is_disabled(Member::Secrets)
-        && let Some(snapshot) = &parts.config
-    {
+    if let Some(snapshot) = &parts.config {
         let config = snapshot.load();
-        let table = state.stage(
-            &config,
-            parts.sections.secrets.allow_plain,
-            config.version(),
-        )?;
-        state.accept(table);
+        if parts.settings.is_disabled(Member::Secrets) {
+            // Disabled at run time: a reference is refused, as without the
+            // feature, so it is never read as a literal.
+            crate::config::load::refuse_references(&config)?;
+        } else {
+            let table = state.stage(
+                &config,
+                parts.sections.secrets.allow_plain,
+                config.version(),
+            )?;
+            state.accept(table);
+        }
     }
     parts.secrets = Some(state);
     Ok(())
@@ -1379,6 +1382,15 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
             dir.join(format!("{}.audit", parts.settings.name))
         }
     };
+    // The anchor lives in the state directory, apart from the chain (D-072).
+    let anchor = match &parts.app {
+        Some(app) => Some(
+            app.create_private(path_lib::Kind::State, "audit")
+                .map_err(|e| paths_error(&e).caused_by(e))?
+                .join(format!("{}.anchor", parts.settings.name)),
+        ),
+        None => None,
+    };
     let hash = match section.hash {
         AuditHash::Sha256 => HashKind::Sha256,
         #[cfg(feature = "audit-blake3")]
@@ -1386,8 +1398,13 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
         #[cfg(not(feature = "audit-blake3"))]
         AuditHash::Blake3 => HashKind::Sha256,
     };
-    let (audit, summary) =
-        crate::AuditLog::open(&path, hash, section.sync_every, section.repair_tail)?;
+    let (audit, summary) = crate::AuditLog::open(
+        &path,
+        hash,
+        section.sync_every,
+        section.repair_tail,
+        anchor.as_deref(),
+    )?;
     parts.log.info(
         "audit chain opened",
         &[
@@ -1427,6 +1444,9 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
                 })?;
     }
     parts.kernel.set_audit(audit.clone());
+    if let Some(crash) = &parts.crash {
+        crash.set_audit(audit.clone());
+    }
     parts.audit = Some(audit);
     Ok(())
 }

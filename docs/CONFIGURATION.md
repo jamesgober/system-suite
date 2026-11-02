@@ -110,7 +110,7 @@ Takes effect at restart.
 | `sync` | string | `"every"` | `every`: a record is on disk before `record` returns; `flush`: synced every second and at shutdown |
 | `repair_tail` | bool | `false` | when the last record was cut short by a crash, keep its bytes in `<file>.cut-<offset>` and continue (off: the boot stops with `Audit`) |
 
-A chain that fails verification always stops the boot (`AuditTampered`); no key turns that off. Takes effect at restart.
+A chain that fails verification always stops the boot (`AuditTampered`); no key turns that off. So does a chain shorter than its anchor (`<state dir>/audit/<name>.anchor`, rewritten after every sync, 0.7): do not delete the anchor to get past it, it is the evidence that records were cut. Takes effect at restart.
 
 ## `[secrets]` (feature `secrets`)
 
