@@ -13,7 +13,7 @@
 
 ---
 
-## [0.7.0] - 2026-10-29
+## [0.7.0] - 2026-11-02
 
 Hardening: every threat has a passing attack test, and a security review
 of the whole suite is closed.
