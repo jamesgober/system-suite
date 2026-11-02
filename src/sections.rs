@@ -91,6 +91,9 @@ pub(crate) struct Kernel {
     pub(crate) notify: bool,
     pub(crate) reload_signal: bool,
     pub(crate) dump_signal: bool,
+    /// How often the memory watermark reads memory; `None` keeps it off.
+    pub(crate) memory_watch: Option<Duration>,
+    pub(crate) memory_shed: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +150,8 @@ impl Default for Sections {
                 notify: true,
                 reload_signal: true,
                 dump_signal: true,
+                memory_watch: None,
+                memory_shed: 90,
             },
             ids: Ids {
                 worker: 0,

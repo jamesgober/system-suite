@@ -47,12 +47,19 @@ const KNOWN: &[(&str, &[&str])] = &[
             "notify",
             "reload_signal",
             "dump_signal",
+            "memory_watch",
+            "memory_shed",
         ],
     ),
     ("ids", &["worker", "epoch"]),
     ("audit", &["enabled", "file", "hash", "sync", "repair_tail"]),
     ("secrets", &["allow_plain"]),
 ];
+
+/// `kernel.memory_watch`: often enough to matter, and the reading is one
+/// or two small file reads, so 100 ms is the floor.
+const MIN_MEMORY_WATCH: std::time::Duration = std::time::Duration::from_millis(100);
+const MAX_MEMORY_WATCH: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Reads and validates the suite's sections.
 pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
@@ -165,6 +172,22 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
     }
     s.kernel.reload_signal = config.get_or("kernel.reload_signal", s.kernel.reload_signal)?;
     s.kernel.dump_signal = config.get_or("kernel.dump_signal", s.kernel.dump_signal)?;
+    s.kernel.memory_watch = config.get("kernel.memory_watch")?;
+    if let Some(period) = s.kernel.memory_watch {
+        if !cfg!(all(feature = "kernel", feature = "sys")) {
+            return Err(invalid(
+                "`kernel.memory_watch` needs the kernel and sys features",
+                "enable the features, or remove the key",
+            ));
+        }
+        if period < MIN_MEMORY_WATCH || period > MAX_MEMORY_WATCH {
+            return Err(invalid(
+                "`kernel.memory_watch` must be from 100 ms to one hour",
+                "set `kernel.memory_watch` to a duration from \"100ms\" to \"1h\"",
+            ));
+        }
+    }
+    s.kernel.memory_shed = bounded(config, "kernel.memory_shed", s.kernel.memory_shed, 1, 99)?;
 
     s.ids.worker = bounded(config, "ids.worker", s.ids.worker, 0, 1_023)?;
     s.ids.epoch_ms = config.get("ids.epoch")?;
@@ -277,6 +300,18 @@ mod tests {
         assert_eq!(s.ids.worker, 12);
     }
 
+    #[cfg(all(feature = "kernel", feature = "sys"))]
+    #[test]
+    fn test_the_memory_watermark_is_off_unless_asked_for() {
+        let off = sections("").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(off.kernel.memory_watch, None);
+        assert_eq!(off.kernel.memory_shed, 90);
+        let on = sections("[kernel]\nmemory_watch = \"5s\"\nmemory_shed = 80\n");
+        let on = on.unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(on.kernel.memory_watch, Some(Duration::from_secs(5)));
+        assert_eq!(on.kernel.memory_shed, 80);
+    }
+
     #[test]
     fn test_unknown_keys_and_bad_values_are_refused() {
         for text in [
@@ -288,6 +323,10 @@ mod tests {
             "[kernel]\nshutdown_deadline = \"0s\"\n",
             "[kernel]\nshutdown_deadline = \"2h\"\n",
             "[kernel]\nshutdown_deadline = \"5s\"\nmember_reserve = \"5s\"\n",
+            "[kernel]\nmemory_watch = \"1ms\"\n",
+            "[kernel]\nmemory_watch = \"2h\"\n",
+            "[kernel]\nmemory_shed = 0\n",
+            "[kernel]\nmemory_shed = 100\n",
             "[ids]\nepoch = 99999999999999\n",
             "log = 3\n",
         ] {

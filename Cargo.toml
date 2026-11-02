@@ -141,9 +141,10 @@ audit-blake3 = ["audit", "audit-trail/blake3"]
 # Members by published version, never `path` (dev/PLAN.md, D-003). Every
 # third-party crate they bring is reviewed in dev/PLAN.md section 12.4.
 [dependencies]
-# Build info, instance info, process guard. First-party; brings path-lib,
-# clock-lib, and id-forge (all first-party, no third-party crates).
-sys-lib = { version = "0.3", optional = true }
+# Build info, instance info, process guard, live memory readings (0.4).
+# First-party; brings path-lib, clock-lib, and id-forge (all first-party, no
+# third-party crates).
+sys-lib = { version = "0.4", optional = true }
 
 # Application directories and hardened joins; 1.1 for owner-only
 # directories on every OS (`ensure_private`). First-party, no dependencies.

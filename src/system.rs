@@ -305,6 +305,8 @@ impl System {
         parts.mark_ready();
         #[cfg(feature = "kernel")]
         parts.start_watchdog();
+        #[cfg(all(feature = "kernel", feature = "sys"))]
+        parts.start_memory_watch();
         parts.log.info("ready", &[("boot_ms", Val::U64(boot_ms))]);
         System {
             foundation,
