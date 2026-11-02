@@ -13,6 +13,26 @@
 
 ---
 
+## [0.7.1] - 2026-11-02
+
+The urgent line's memory watermark.
+
+### Added
+
+- `[kernel] memory_watch` and `memory_shed`: the memory watermark raises
+  the urgent line to `Shed` under memory pressure or above a share of
+  memory used, and clears it once memory has recovered. Off by default:
+  each reading wakes a thread, and an idle system otherwise wakes nothing.
+  It never lowers a `Lockdown`, never undoes a stop, and leaves a `Shed`
+  someone else set alone.
+- The boot benchmark measures one watermark reading, and idle CPU on
+  Windows and macOS. CI runs it on all three OSes, without a gate.
+
+### Changed
+
+- sys-lib 0.4.
+
+
 ## [0.7.0] - 2026-11-02
 
 Hardening: every threat has a passing attack test, and a security review
@@ -332,7 +352,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/jamesgober/system-suite/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jamesgober/system-suite/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jamesgober/system-suite/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jamesgober/system-suite/compare/v0.4.0...v0.5.0

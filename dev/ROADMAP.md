@@ -66,7 +66,7 @@ Exit: every FR implemented and tested on Linux, macOS, and Windows; `docs/ARCHIT
 
 ## v0.6.0 - Optimisation
 Exit: every target in `PLAN.md` section 13 measured and published.
-- Moved on (D-071): the memory watermark that raises the urgent line to `Shed`. It ships in the release after sys-lib 0.4.0 (`mem::pressure`) is published; sys-lib is at 0.3.0.
+- Moved on (D-071): the memory watermark that raises the urgent line to `Shed`. It ships in the release after sys-lib 0.4.0 (`mem::pressure`) is published. Done in 0.7.1.
 - [x] Boot benchmark harness (standard library only, D-068); boot timeline per step (`System::boot_timeline`, D-070).
 - [x] `docs/PERFORMANCE.md` published (every target met on Linux and Windows); baselines stored in `benches/baseline/`; the 5% regression gate with a noise floor active in the release routine (D-068). Idle CPU and wake-ups on macOS and Windows wait for sys-lib 0.4's live readings.
 
@@ -80,6 +80,11 @@ Exit: no open finding; every threat has a passing attack test.
 - Documented limit (D-079): the crash hook, removed at shutdown, puts back the hook that was installed before boot; a panic hook the application installed after boot is replaced by that earlier one. Reason: the standard library keeps one process-wide panic hook and gives no way to tell whose it is; an application that installs its own hook after boot is told so in `docs/API.md`.
 - Documented limit (D-079): process-wide members set once (log-io's global logger, metrics-lib's global registry) stay installed after a boot that failed after setting them. Reason: the members allow setting them once only; the process exits after a failed boot in every documented use, and a test uses `process_wide(false)`.
 - Documented limit (D-079): event handlers run on the thread that tears down, outside the shutdown deadline. Reason: they are the application's code, documented to return quickly; bounding each one would cost a thread per event.
+
+## v0.7.1 - The memory watermark
+Requires: sys-lib 0.4.0 (published 2026-10-30).
+- [x] The urgent line's memory watermark, opt-in through `[kernel] memory_watch` (D-081), shipped outside 0.8 (D-082).
+- [x] Idle CPU on Windows and macOS through sys-lib's `process::cpu_time`; the benchmark runs on all three OSes in CI. A wake-up reading on Windows and macOS is not in sys-lib; kept for the pre-1.0 polish pass.
 
 ## v0.8.0 - Alpha
 Exit: two real consumers boot on it on every listed environment.
@@ -95,7 +100,7 @@ Exit: two weeks without an API change; every document checked against the build;
 ## v0.9.x - Pre-1.0 polish (before any 1.0 release candidate)
 James's standing rule (2026-10-29, D-080): go back and fix every issue and tune the performance before getting close to release.
 Exit: nothing below is open without a recorded, hard reason; what is still open is listed in the 1.0 readiness note for James.
-- [ ] Every accepted gap, deferred item, known issue, and blocker revisited: the urgent line's memory watermark (sys-lib 0.4.0), the held features (`config-json`, `config-xml`, `config-validation`, `metrics-json`, `metrics-otlp`, `metrics-system`), idle CPU and wake-up readings on Windows and macOS (sys-lib 0.4), the documented limits of D-079, and every "Moved" line in this roadmap. Each one is fixed, or kept with its reason restated.
+- [ ] Every accepted gap, deferred item, known issue, and blocker revisited: the urgent line's memory watermark (sys-lib 0.4.0), the held features (`config-json`, `config-xml`, `config-validation`, `metrics-json`, `metrics-otlp`, `metrics-system`), wake-up readings on Windows and macOS (a sys-lib request; idle CPU itself is measured since 0.7.1), the documented limits of D-079, and every "Moved" line in this roadmap. Each one is fixed, or kept with its reason restated.
 - [ ] A fresh performance tuning pass: profile boot, stop, reload, and the request-path reads again on Linux, macOS, and Windows; act on what it finds; update `docs/PERFORMANCE.md` and the baselines.
 - [ ] The security and edge-case review run again over the whole suite (the 0.7 review's method), every finding fixed or recorded.
 - [ ] The same pass for each member release made for the suite (fix, tune, review before it is published).
