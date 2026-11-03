@@ -410,6 +410,7 @@ pub(crate) fn validate_name(name: &str, what: &str) -> Result<(), Error> {
     let valid = !name.is_empty()
         && name.len() <= 64
         && !name.starts_with('.')
+        && !name.ends_with('.')
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
@@ -418,7 +419,7 @@ pub(crate) fn validate_name(name: &str, what: &str) -> Result<(), Error> {
     } else {
         Err(setup(
             format!("the {what} name {name:?} is not valid"),
-            "use 1 to 64 ASCII letters, digits, '-', '_', or '.', not starting with '.'",
+            "use 1 to 64 ASCII letters, digits, '-', '_', or '.', not starting or ending with '.'",
         ))
     }
 }
@@ -443,6 +444,7 @@ mod tests {
         for name in [
             "",
             ".hidden",
+            "trailing.",
             "has space",
             "slash/name",
             "é",

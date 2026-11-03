@@ -101,6 +101,13 @@ impl Reloader {
         result
     }
 
+    /// Returns once no reload is running. The shutdown calls it (bounded)
+    /// after setting a stop reason, so no reload commits to a subsystem
+    /// that is being stopped.
+    pub(crate) fn wait_idle(&self) {
+        drop(self.running.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+
     fn try_reload(&self) -> Result<u64, Error> {
         let _one_at_a_time = self.running.lock().unwrap_or_else(PoisonError::into_inner);
         if self.kernel.stop_reason().is_some() {

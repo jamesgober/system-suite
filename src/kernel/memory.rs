@@ -68,7 +68,10 @@ impl Watermark {
             self.calm = 0;
             return;
         }
-        let calm = !pressed && reading.used_percent < self.shed_percent - CLEAR_MARGIN;
+        // Below the mark by the margin, or by half the mark when the mark
+        // is too low for the margin (a mark of 5% would never clear).
+        let clear_below = (self.shed_percent - CLEAR_MARGIN).max(self.shed_percent / 2.0);
+        let calm = !pressed && reading.used_percent < clear_below;
         self.calm = if calm { self.calm + 1 } else { 0 };
         if self.calm >= CALM_READINGS {
             let _cleared = line.shift(Level::Shed, Level::Normal, CLEAR_REASON);
@@ -144,6 +147,26 @@ mod tests {
         mark.step(CALM, &line);
         mark.step(CALM, &line);
         assert_eq!(line.level(), Level::Shed);
+    }
+
+    #[test]
+    fn test_a_low_mark_still_clears() {
+        let line = UrgentLine::detached();
+        let mut mark = Watermark::new(4);
+        let high = Reading {
+            pressure: None,
+            used_percent: 10.0,
+        };
+        let low = Reading {
+            pressure: None,
+            used_percent: 1.0,
+        };
+        mark.step(high, &line);
+        assert_eq!(line.level(), Level::Shed);
+        for _ in 0..3 {
+            mark.step(low, &line);
+        }
+        assert_eq!(line.level(), Level::Normal);
     }
 
     #[test]
