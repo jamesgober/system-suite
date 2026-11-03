@@ -36,6 +36,13 @@ the breaking changes are made before 1.0.
   `StopReason::Supervisor`.
 - `EventGuard` and `EventId`.
 
+### Fixed
+
+- Stopping a runtime with any timer armed (the memory watermark,
+  `[audit] sync = "flush"`, the systemd keep-alive) polled the timer thread
+  with 1 ms sleeps, so a stop took 1.3 to 2.0 ms; it now waits on a
+  channel the thread disconnects when it ends (about 0.2 ms).
+
 ### Documented
 
 - `Step::number` is for messages: later steps may move the numbers.

@@ -13,6 +13,7 @@ use std::{
     sync::{
         Arc, Condvar, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU8, Ordering},
+        mpsc,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -103,7 +104,9 @@ struct State {
 pub(crate) struct Timers {
     state: Mutex<State>,
     wake: Condvar,
-    thread: Mutex<Option<JoinHandle<()>>>,
+    /// The thread, and a channel that disconnects when it ends (its
+    /// sender lives on the thread), so a stop waits without polling.
+    thread: Mutex<Option<(JoinHandle<()>, mpsc::Receiver<()>)>>,
 }
 
 impl Timers {
@@ -178,12 +181,16 @@ impl Timers {
         if thread.is_some() {
             return Ok(());
         }
+        let (ended, finished) = mpsc::channel::<()>();
         let spawned = thread::Builder::new()
             .name("system-suite-timer".to_owned())
-            .spawn(move || run(&runtime));
+            .spawn(move || {
+                let _ended = ended;
+                run(&runtime);
+            });
         match spawned {
             Ok(handle) => {
-                *thread = Some(handle);
+                *thread = Some((handle, finished));
                 Ok(())
             }
             Err(e) => Err(Error::new(
@@ -217,14 +224,14 @@ impl Timers {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
-        let Some(handle) = handle else {
+        let Some((handle, finished)) = handle else {
             return true;
         };
-        while !handle.is_finished() {
-            if Instant::now() >= deadline {
-                return false;
-            }
-            thread::sleep(Duration::from_millis(1));
+        // The thread ends by dropping its sender: no message ever comes,
+        // so `Disconnected` is the end and `Timeout` the deadline.
+        let left = deadline.saturating_duration_since(Instant::now());
+        if let Err(mpsc::RecvTimeoutError::Timeout) = finished.recv_timeout(left) {
+            return false;
         }
         // The thread finished its loop; callback panics were caught there.
         let _ended = handle.join();
