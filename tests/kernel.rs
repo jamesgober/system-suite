@@ -904,6 +904,21 @@ fn test_reloads_and_lockdowns_are_audited() {
         .unwrap();
     let after = system.audit().next_id().unwrap().as_u64();
     assert_eq!(after, before + 2);
+    // A shed while locked down neither lowers the line nor is recorded.
+    let urgent = system.kernel().urgent();
+    assert!(
+        urgent
+            .set(system_suite::kernel::Level::Shed, "sneak")
+            .is_err()
+    );
+    urgent
+        .shift(
+            system_suite::kernel::Level::Lockdown,
+            system_suite::kernel::Level::Normal,
+            "incident closed",
+        )
+        .unwrap();
+    assert_eq!(system.audit().next_id().unwrap().as_u64(), after + 1);
     let _id = system
         .audit()
         .record("t", "t", "t", Outcome::Success)
@@ -915,6 +930,8 @@ fn test_reloads_and_lockdowns_are_audited() {
         "config.reload",
         "urgent.lockdown",
         "intrusion suspected",
+        "urgent.lockdown_lifted",
+        "incident closed",
         "stop",
     ] {
         assert!(text.contains(needle), "missing {needle}");

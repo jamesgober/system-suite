@@ -11,6 +11,38 @@
 
 ## [Unreleased]
 
+API review against the planned consumers (WASP's boot, Hive DB start-ups):
+the breaking changes are made before 1.0.
+
+### Changed (breaking)
+
+- `UrgentLine::set` only raises the level; lowering it takes
+  `UrgentLine::shift(from, to, reason)`, which moves the line only if it is
+  at `from`. A `Lockdown` can no longer be undone by a `set(Normal)` from
+  anywhere; lifting one is audited (`urgent.lockdown_lifted`).
+- Urgent and stop reasons take owned text: `set`, `shift`, and
+  `request_stop` accept `impl Into<Cow<'static, str>>`, and
+  `StopReason::Requested` holds a `Cow<'static, str>`. A literal still
+  costs nothing.
+- `Notice` is `#[non_exhaustive]`, no longer `Copy`, and carries the level
+  it replaced (`previous`); `Notice::new` builds one for tests.
+- `Foundation::events()` returns the suite's `Events` handle (listen only)
+  instead of registry-io's `Arc<SyncRegistry<Event>>`, so application code
+  cannot publish a kernel event.
+
+### Added
+
+- `Kernel::request_supervisor_stop`: a stop whose reason is
+  `StopReason::Supervisor`.
+- `EventGuard` and `EventId`.
+
+### Documented
+
+- `Step::number` is for messages: later steps may move the numbers.
+- Each subsystem's `stop` gets the whole remaining deadline (a door drains
+  to a fraction of it); `Stopping` is raised after the subsystems stop;
+  `Builder::register` subsystems start after every `Boot::start`.
+
 ---
 
 ## [0.7.1] - 2026-11-02

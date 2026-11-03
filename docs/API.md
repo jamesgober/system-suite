@@ -410,14 +410,14 @@ pub enum Step {
 }
 
 impl Step {
-    pub const fn number(self) -> u8;          // 1 to 17, the position in BOOT-ORDER.md
+    pub const fn number(self) -> u8;          // 1 to 17 in this version; for messages only (D-086)
     pub const fn name(self) -> &'static str;  // "guard"
     pub const fn member(self) -> Option<Member>;
 }
 impl std::fmt::Display for Step;              // "step 6 (guard)"
 ```
 
-The boot steps, in order. `Step` values compare in boot order.
+The boot steps, in order. `Step` values compare in boot order. `number` is the position in this version's order, for messages and documents: a later version may add steps (the error and security planes), which moves the numbers after them, so code matches the variant or compares with `<` instead (D-086).
 
 ```rust,ignore
 use system_suite::Step;
@@ -557,7 +557,7 @@ let code = system.shutdown();
 
 ```rust,ignore
 impl System {
-    pub fn request_stop(&self, reason: &'static str) -> bool;
+    pub fn request_stop(&self, reason: impl Into<Cow<'static, str>>) -> bool;   // owned text since 0.8
     pub fn reload(&self) -> Result<u64, Error>;
 }
 ```
@@ -767,7 +767,7 @@ impl Boot {
 A framework's own boot phases happen between the foundation and readiness, and each phase builds things that need the previous phase's results (for example: load the application's modules, then connect the providers they declared, then open the listener with the routes they registered). `Boot` lets a framework do that with full typed access:
 
 - `start` starts a subsystem immediately (its `start` runs on the calling thread) and appends it to the stop order. On error, the subsystem is not added and the `Boot` is still usable; the framework decides whether to continue or drop the `Boot`.
-- `ready` starts the subsystems given to `Builder::register` (in `Position` order), runs `on_ready`, sends readiness, and returns the `System`.
+- `ready` starts the subsystems given to `Builder::register` (in `Position` order), runs `on_ready`, sends readiness, and returns the `System`. They start **after** everything `start` started, so a framework that opens its door with `start` registers nothing with `Builder::register` that must come before the door; start it with `start` too, in order.
 - Dropping a `Boot` stops everything it started, in reverse, as a boot failure does. A stop signal received while a `Boot` exists is recorded and makes the next `start` or `ready` fail with `Interrupted`.
 
 ```rust,ignore
@@ -809,7 +809,7 @@ The typed handles of every enabled member, built once at boot. It is what a fram
 | `clock(&self)` | `&dyn clock::Clock` | `time` | 0.3 |
 | `ids(&self)` | `&id::snowflake::Snowflake` (worker id from `[ids] worker`) | `ids` | 0.3 |
 | `audit(&self)` | `&AuditLog` | `audit` | 0.5 |
-| `events(&self)` | `&Arc<registry::SyncRegistry<kernel::Event>>` | `registry` | 0.5 |
+| `events(&self)` | `&kernel::Events` (listen only; since 0.8, D-085) | `registry` | 0.5 |
 | `vault(&self)` | `&vault::KeyVault` | `secrets` | 0.5 |
 | `kernel(&self)` | `&kernel::Kernel` | `kernel` | 0.3 |
 | `runtime(&self)` | `&runtime::Runtime` | `kernel` | 0.4 |
@@ -942,7 +942,8 @@ The suite's controller: it receives the signals, decides when the process stops,
 pub struct Kernel { /* Arc: the kernel's control block */ }
 impl Kernel {
     pub fn phase(&self) -> lifecycle::Phase;                                                   // 0.3
-    pub fn request_stop(&self, reason: &'static str) -> bool;                                 // 0.3
+    pub fn request_stop(&self, reason: impl Into<Cow<'static, str>>) -> bool;                // 0.3; owned text since 0.8
+    pub fn request_supervisor_stop(&self, reason: impl Into<String>) -> bool;                 // 0.8: StopReason::Supervisor
     pub fn stop_reason(&self) -> Option<lifecycle::StopReason>;                               // 0.3
     pub fn wait_for_stop(&self) -> lifecycle::StopReason;                                     // 0.3
     pub fn wait_for_stop_timeout(&self, timeout: Duration) -> Option<lifecycle::StopReason>;  // 0.3
@@ -981,7 +982,8 @@ impl UrgentLine {
     pub fn level(&self) -> Level;                                               // #[inline]
     pub fn epoch(&self) -> u64;                                                 // #[inline]
     pub fn notice(&self) -> Notice;
-    pub fn set(&self, level: Level, reason: &'static str) -> Result<u64, Error>;
+    pub fn set(&self, level: Level, reason: impl Into<Cow<'static, str>>) -> Result<u64, Error>;   // raises only (0.8)
+    pub fn shift(&self, from: Level, to: Level, reason: impl Into<Cow<'static, str>>) -> Result<u64, Error>; // 0.8
     pub fn watch(&self) -> Watch;
 }
 
@@ -991,8 +993,10 @@ impl Watch {
     pub fn level(&self) -> Level;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Notice { pub level: Level, pub epoch: u64, pub reason: &'static str }
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]                                                               // 0.8: more fields may come
+pub struct Notice { pub level: Level, pub previous: Level, pub epoch: u64, pub reason: Cow<'static, str> }
+impl Notice { pub fn new(level: Level, previous: Level, epoch: u64, reason: impl Into<Cow<'static, str>>) -> Notice; }
 ```
 
 How the kernel (and, when present, the security package) tells the whole process "shed load", "lock down", "drain", or "stop" now, without an event loop in the way (PLAN section 6.3). Tier T0 is the atomic level and epoch that every worker reads at its checkpoints; tier T1 is each subsystem's [`Mailbox`](#link-and-mailbox), poked and woken directly; tier T2 is the [`Event`](#event) record in the registry, logs, and metrics.
@@ -1005,7 +1009,7 @@ How the kernel (and, when present, the security package) tells the whole process
 | `Draining` | the kernel, at a stop request | accept no new work; finish what is in flight |
 | `Stopping` | the kernel, after the subsystems stopped or at the deadline | stop now |
 
-`set` changes the level to `Normal`, `Shed`, or `Lockdown` and returns the new epoch. `Draining` and `Stopping` belong to the kernel (`request_stop`), and once a stop is requested the line only moves forward; both cases return `UrgentRefused`. Every change is logged, counted, and published as an `Event`.
+`set` raises the level to `Shed` or `Lockdown` (or announces the same level with a new reason) and returns the new epoch; it never lowers it (since 0.8, D-084), so a `Lockdown` the security package set cannot be undone by a `set(Normal)` from anywhere else. `shift(from, to, reason)` is the way down: it moves the line only if it is at `from`, and otherwise returns `UrgentRefused` naming the level it is at. Lifting a `Lockdown` is audited (`urgent.lockdown_lifted`) like raising one. A reason is a literal (no allocation) or owned text (one allocation per change). `Draining` and `Stopping` belong to the kernel (`request_stop`), and once a stop is requested the line only moves forward; both cases return `UrgentRefused`. Every change is logged, counted, and published as an `Event`.
 
 The memory watermark (since 0.7.1, D-081) is off until `[kernel] memory_watch` sets how often it reads memory, because each reading wakes a thread and an idle system otherwise wakes nothing. It raises the line from `Normal` to `Shed` when the OS reports memory pressure at `Warning` or above (`sys::mem::pressure`) or the share of memory used reaches `[kernel] memory_shed` (inside a container, the container's limit counts), and clears it after three readings in a row with no pressure and the share at least 5 points below the mark. It only moves the line between those two levels, and only when the line is where it expects: it never lowers a `Lockdown`, never overrides a stop, and leaves a `Shed` someone else set for them to clear. Cost: one reading is about 10 µs on Linux and 2 µs on Windows [measured, `docs/PERFORMANCE.md`], on the timer thread.
 
@@ -1036,7 +1040,7 @@ loop {
 let line = system.kernel().urgent();
 line.set(Level::Shed, "upstream is failing")?;
 // ...
-line.set(Level::Normal, "upstream recovered")?;
+line.shift(Level::Shed, Level::Normal, "upstream recovered")?;   // refused if someone locked down since
 ```
 
 ### Health: `Health`, `Status`, `HealthReport`
@@ -1127,7 +1131,7 @@ pub enum Event {
 }
 ```
 
-The kernel's record of what happened (urgent line tier T2), delivered synchronously to callbacks registered on `Foundation::events()` (registry-io's `SyncRegistry`). The registry declares and records; it never delivers urgent changes, which go through the urgent line first (D-006). A panicking callback is isolated by registry-io and does not stop the kernel.
+The kernel's record of what happened (urgent line tier T2), delivered synchronously to callbacks registered on `Foundation::events()`. Since 0.8 that is the suite's own `Events` handle (`register_guard` returning an `EventGuard`, `register` and `unregister` with an `EventId`, `handler_count`, `panic_count`); it has no way to publish, so only the kernel emits events (D-085). The registry declares and records; it never delivers urgent changes, which go through the urgent line first (D-006). A panicking callback is isolated by registry-io and does not stop the kernel.
 
 ```rust,ignore
 let _guard = system.events().register_guard(|event: &Event| {
@@ -1156,9 +1160,9 @@ pub enum Phase { Booting, Ready, Draining, Stopping, Stopped }
 #[non_exhaustive]
 pub enum StopReason {
     Signal { name: &'static str },      // "SIGTERM", "SIGINT", "CTRL_C", "CTRL_CLOSE", "SERVICE_STOP", ...
-    Requested { reason: &'static str }, // request_stop
+    Requested { reason: Cow<'static, str> }, // request_stop (owned text since 0.8)
     WorkerFailed { name: String },      // a critical worker exhausted its restart budget
-    Supervisor { reason: String },      // the out-of-process watchdog (tower), when present
+    Supervisor { reason: String },      // Kernel::request_supervisor_stop (0.8): a watchdog, an orchestrator, a tower
 }
 impl std::fmt::Display for StopReason;
 impl StopReason { pub fn exit_code(&self) -> u8; }   // 0, except WorkerFailed: 70
@@ -1304,7 +1308,7 @@ impl Mailbox {
 }
 ```
 
-What a subsystem receives at `start`: everything it is allowed to reach, by reference (the core contract's "link"). The `Mailbox` is the urgent line's tier T1: on every urgent change the kernel stores the latest `Notice` in each subsystem's mailbox and wakes whoever waits on it, so a subsystem whose thread is parked (an idle listener, a flusher) acts at once instead of at its next checkpoint. Notices coalesce: a waiter gets the latest one.
+What a subsystem receives at `start`: everything it is allowed to reach, by reference (the core contract's "link"). The `Mailbox` is the urgent line's tier T1: on every urgent change the kernel stores the latest `Notice` in each subsystem's mailbox and wakes whoever waits on it, so a subsystem whose thread is parked (an idle listener, a flusher) acts at once instead of at its next checkpoint. Notices coalesce: a waiter gets the latest one. Since 0.8 a notice carries the level it replaced (`previous`), so a subsystem woken after a `Lockdown` was already lifted still sees that one happened; an epoch more than one past the last it saw means it missed changes in between.
 
 `report_error` records an error the subsystem handled but the operator should see: it is logged at error level with the subsystem's name and counted (`system_suite_subsystem_errors_total{subsystem}`). When the planned error suite is published, it is also delivered to it (PLAN section 12.3); the signature does not change.
 

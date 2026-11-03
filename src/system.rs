@@ -67,7 +67,7 @@ struct Shared {
     #[cfg(feature = "audit")]
     audit: crate::AuditLog,
     #[cfg(feature = "registry")]
-    events: Arc<registry_io::SyncRegistry<crate::kernel::Event>>,
+    events: crate::kernel::Events,
     #[cfg(feature = "secrets")]
     vault: key_vault::KeyVault,
     #[cfg(feature = "time")]
@@ -190,7 +190,7 @@ impl Foundation {
     /// never notifies it.
     #[cfg(feature = "registry")]
     #[must_use]
-    pub fn events(&self) -> &Arc<registry_io::SyncRegistry<crate::kernel::Event>> {
+    pub fn events(&self) -> &crate::kernel::Events {
         &self.shared.events
     }
 
@@ -393,7 +393,7 @@ impl System {
     /// See [`Foundation::events`].
     #[cfg(feature = "registry")]
     #[must_use]
-    pub fn events(&self) -> &Arc<registry_io::SyncRegistry<crate::kernel::Event>> {
+    pub fn events(&self) -> &crate::kernel::Events {
         self.foundation.events()
     }
 
@@ -475,7 +475,7 @@ impl System {
     /// a stop was already requested (the first reason is kept). Never
     /// blocks.
     #[cfg(feature = "kernel")]
-    pub fn request_stop(&self, reason: &'static str) -> bool {
+    pub fn request_stop(&self, reason: impl Into<std::borrow::Cow<'static, str>>) -> bool {
         self.foundation.kernel().request_stop(reason)
     }
 
@@ -695,7 +695,7 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
             events: parts
                 .events
                 .clone()
-                .unwrap_or_else(|| Arc::new(registry_io::SyncRegistry::new())),
+                .unwrap_or_else(crate::kernel::Events::new),
             #[cfg(feature = "secrets")]
             vault: parts
                 .secrets

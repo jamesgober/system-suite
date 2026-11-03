@@ -87,7 +87,7 @@ impl fmt::Display for Phase {
 /// ```
 /// use system_suite::lifecycle::StopReason;
 ///
-/// let reason = StopReason::Requested { reason: "admin" };
+/// let reason = StopReason::Requested { reason: "admin".into() };
 /// assert_eq!(reason.exit_code(), 0);
 /// assert_eq!(reason.to_string(), "requested: admin");
 /// ```
@@ -103,7 +103,7 @@ pub enum StopReason {
     /// The application asked (`Kernel::request_stop`).
     Requested {
         /// The reason the application gave.
-        reason: &'static str,
+        reason: std::borrow::Cow<'static, str>,
     },
     /// A critical worker exhausted its restart budget (from `0.4`).
     WorkerFailed {
