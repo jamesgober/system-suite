@@ -104,13 +104,13 @@ A stop signal received after step 7 is recorded. At the next step boundary the b
 
 ### The steps
 
-A stop is requested by a stop signal, `System::request_stop`, a critical worker that exhausted its restarts, or a supervisor. The kernel then runs:
+A stop is requested by a stop signal, `System::request_stop`, a critical worker that exhausted its restarts, or a supervisor (`Kernel::request_supervisor_stop`). The kernel then runs:
 
 | # | Step | What happens | Since |
 |---|---|---|---|
 | 1 | `Draining` | the phase becomes `Draining`; the urgent line is raised to `Draining` (every worker sees it at its next checkpoint, every subsystem's mailbox is poked); `STOPPING=1` to systemd | 0.3 |
 | 2 | subsystems | stopped one at a time in the reverse of their start order, each on a stop thread and given the remaining shutdown deadline minus the member reserve; one log line per subsystem with its stop time, or that it was abandoned | 0.4 |
-| 3 | `Stopping` | the urgent line is raised to `Stopping`; workers are asked to stop and joined; the timer thread stops | 0.4 |
+| 3 | `Stopping` | the urgent line is raised to `Stopping` once the subsystems have stopped (or at the deadline, when one was abandoned); workers are asked to stop and joined; the timer thread stops | 0.4 |
 | 4 | registry | event handlers are cleared and waited for, so none runs while members close | 0.5 |
 | 5 | audit | the chain is flushed and synced to disk | 0.5 |
 | 6 | metrics | a final export, when an exporter is configured (the suite configures none in 0.4); process-wide registries stay readable | 0.4 |
@@ -118,6 +118,8 @@ A stop is requested by a stop signal, `System::request_stop`, a critical worker 
 | 8 | signals | the signal intake is uninstalled; a further signal gets the operating system's default action | 0.3 |
 | 9 | logging | the last line (the exit code and the uptime), then flush and close | 0.3 |
 | 10 | `Stopped` | the phase becomes `Stopped`; the panic hook is removed (the previous one is put back); `run` returns the exit code; the guard is dropped, releasing the lock | 0.3 |
+
+**The drain budget.** Each subsystem's `stop` receives the whole remaining deadline, not a share of it: the first subsystem to stop is the last one started, usually the door, and a door that drains until that deadline leaves the subsystems after it only the 100 ms grace (D-047). A door should drain to a fraction of its `Deadline` (for example, the time left minus what the stores need to flush) and return.
 
 ### Why each step is where it is
 

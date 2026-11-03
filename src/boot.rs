@@ -77,7 +77,7 @@ pub(crate) struct Parts {
     #[cfg(feature = "audit")]
     pub(crate) audit: Option<crate::AuditLog>,
     #[cfg(feature = "registry")]
-    pub(crate) events: Option<Arc<registry_io::SyncRegistry<crate::kernel::Event>>>,
+    pub(crate) events: Option<crate::kernel::Events>,
     #[cfg(feature = "secrets")]
     pub(crate) secrets: Option<Arc<crate::secrets::State>>,
     #[cfg(feature = "signals")]
@@ -1504,7 +1504,7 @@ fn step_audit(parts: &mut Parts) -> Result<(), Error> {
 /// it.
 #[cfg(feature = "registry")]
 fn step_registry(parts: &mut Parts) -> Result<(), Error> {
-    let events = Arc::new(registry_io::SyncRegistry::new());
+    let events = crate::kernel::Events::new();
     let log = parts.log.clone();
     events.on_panic(move |panic| {
         log.error(
@@ -1516,7 +1516,7 @@ fn step_registry(parts: &mut Parts) -> Result<(), Error> {
         );
     });
     if !parts.settings.is_disabled(Member::Registry) {
-        parts.kernel.set_events(Arc::clone(&events));
+        parts.kernel.set_events(events.clone());
     }
     parts.events = Some(events);
     Ok(())

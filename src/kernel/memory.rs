@@ -59,7 +59,7 @@ impl Watermark {
             || reading.used_percent >= self.shed_percent;
         let Some(epoch) = self.held else {
             if pressed {
-                self.held = line.shift(Level::Normal, Level::Shed, RAISE_REASON);
+                self.held = line.shift(Level::Normal, Level::Shed, RAISE_REASON).ok();
             }
             return;
         };

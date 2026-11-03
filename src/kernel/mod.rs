@@ -38,7 +38,7 @@ pub(crate) mod signals;
 mod urgent;
 
 #[cfg(feature = "registry")]
-pub use events::Event;
+pub use events::{Event, EventGuard, EventId, Events};
 pub use health::{Component, ComponentHealth, Health, HealthReport, Status};
 pub use urgent::{Level, Notice, UrgentLine, Watch};
 
@@ -64,7 +64,7 @@ pub use urgent::{Level, Notice, UrgentLine, Watch};
 /// std::thread::spawn(move || {
 ///     kernel.request_stop("done");
 /// });
-/// assert_eq!(system.wait_for_stop(), StopReason::Requested { reason: "done" });
+/// assert_eq!(system.wait_for_stop(), StopReason::Requested { reason: "done".into() });
 /// let code = system.shutdown();
 /// # let _ = code;
 /// # }
@@ -88,7 +88,7 @@ struct Control {
     #[cfg(feature = "audit")]
     audit: OnceLock<crate::AuditLog>,
     #[cfg(feature = "registry")]
-    events: OnceLock<Arc<registry_io::SyncRegistry<Event>>>,
+    events: OnceLock<Events>,
 }
 
 /// A started subsystem, as the kernel holds it.
@@ -166,7 +166,7 @@ impl Kernel {
 
     /// Connects the kernel to the event registry (boot step 14).
     #[cfg(feature = "registry")]
-    pub(crate) fn set_events(&self, events: Arc<registry_io::SyncRegistry<Event>>) {
+    pub(crate) fn set_events(&self, events: Events) {
         let _first = self.control.events.set(events).is_ok();
     }
 
@@ -184,8 +184,20 @@ impl Kernel {
     /// Asks for a clean stop, exactly as a SIGTERM would. Returns `false`
     /// if a stop was already requested (the first reason is kept). Never
     /// blocks.
-    pub fn request_stop(&self, reason: &'static str) -> bool {
-        self.stop_for(StopReason::Requested { reason })
+    pub fn request_stop(&self, reason: impl Into<Cow<'static, str>>) -> bool {
+        self.stop_for(StopReason::Requested {
+            reason: reason.into(),
+        })
+    }
+
+    /// Asks for a clean stop on behalf of an out-of-process supervisor (a
+    /// watchdog, an orchestrator, a tower command): the stop reason is
+    /// [`StopReason::Supervisor`], so the log and the exit say who asked.
+    /// Returns `false` if a stop was already requested.
+    pub fn request_supervisor_stop(&self, reason: impl Into<String>) -> bool {
+        self.stop_for(StopReason::Supervisor {
+            reason: reason.into(),
+        })
     }
 
     /// Records `reason` as the stop reason if none is set, and wakes every
@@ -360,26 +372,37 @@ impl Kernel {
                 &[
                     ("level", Val::Str(notice.level.name())),
                     ("epoch", Val::U64(notice.epoch)),
-                    ("reason", Val::Str(notice.reason)),
+                    ("reason", Val::Str(&notice.reason)),
                 ],
             );
             urgent_metrics.urgent(notice.level);
             #[cfg(feature = "registry")]
             if let Some(control) = urgent_events.upgrade() {
-                Kernel { control }.emit(|| Event::Urgent { notice });
+                Kernel { control }.emit(|| Event::Urgent {
+                    notice: notice.clone(),
+                });
             }
-            // A lockdown is a privileged action: it goes on the record.
+            // A lockdown, and lifting one, are privileged actions: both go
+            // on the record (D-084).
             #[cfg(feature = "audit")]
-            if notice.level == Level::Lockdown
-                && let Some(audit) = &urgent_audit
+            if let Some(audit) = &urgent_audit
                 && audit.is_enabled()
             {
-                let _recorded = audit.record(
-                    "kernel",
-                    "urgent.lockdown",
-                    notice.reason,
-                    audit_trail::Outcome::Success,
-                );
+                let action = if notice.level == Level::Lockdown {
+                    Some("urgent.lockdown")
+                } else if notice.previous == Level::Lockdown && notice.level < Level::Lockdown {
+                    Some("urgent.lockdown_lifted")
+                } else {
+                    None
+                };
+                if let Some(action) = action {
+                    let _recorded = audit.record(
+                        "kernel",
+                        action,
+                        &notice.reason,
+                        audit_trail::Outcome::Success,
+                    );
+                }
             }
         }));
         let weak = Arc::downgrade(&self.control);
@@ -546,7 +569,9 @@ mod tests {
         assert!(!kernel.request_stop("second"));
         assert_eq!(
             kernel.stop_reason(),
-            Some(StopReason::Requested { reason: "first" })
+            Some(StopReason::Requested {
+                reason: "first".into()
+            })
         );
     }
 
@@ -558,7 +583,31 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         assert!(kernel.request_stop("test"));
         let reason = handle.join().ok();
-        assert_eq!(reason, Some(StopReason::Requested { reason: "test" }));
+        assert_eq!(
+            reason,
+            Some(StopReason::Requested {
+                reason: "test".into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_reasons_may_be_owned_text_and_a_supervisor_says_who_asked() {
+        let kernel = Kernel::new();
+        let who = String::from("operator 7");
+        assert!(kernel.request_stop(format!("maintenance by {who}")));
+        assert_eq!(
+            kernel.stop_reason().map(|r| r.to_string()),
+            Some("requested: maintenance by operator 7".to_owned())
+        );
+        let supervised = Kernel::new();
+        assert!(supervised.request_supervisor_stop("tower: rolling restart"));
+        assert_eq!(
+            supervised.stop_reason(),
+            Some(StopReason::Supervisor {
+                reason: "tower: rolling restart".to_owned()
+            })
+        );
     }
 
     #[test]

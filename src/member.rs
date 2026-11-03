@@ -199,7 +199,11 @@ pub enum Step {
 }
 
 impl Step {
-    /// The position of the step in the boot order, 1 to 17.
+    /// The position of the step in this version's boot order, 1 to 17.
+    /// For messages and documents only: a later version may add steps
+    /// (the error and security planes), which moves the numbers after
+    /// them. Code that decides by step matches the variant or compares
+    /// steps with `<`, which stays right (D-086).
     #[must_use]
     pub const fn number(self) -> u8 {
         match self {

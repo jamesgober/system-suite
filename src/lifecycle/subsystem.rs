@@ -461,11 +461,7 @@ mod tests {
     use crate::kernel::Level;
 
     fn notice(level: Level) -> Notice {
-        Notice {
-            level,
-            epoch: 1,
-            reason: "test",
-        }
+        Notice::new(level, Level::Normal, 1, "test")
     }
 
     #[test]
