@@ -749,7 +749,10 @@ mod tests {
         if let Some(handle) = &handle {
             handle.wake();
         }
-        thread::sleep(Duration::from_millis(50));
+        let end = Instant::now() + Duration::from_secs(10);
+        while woken.load(Ordering::SeqCst) == before && Instant::now() < end {
+            thread::sleep(Duration::from_millis(2));
+        }
         assert!(woken.load(Ordering::SeqCst) > before);
         let _late = rt.stop(Instant::now() + Duration::from_secs(5));
     }

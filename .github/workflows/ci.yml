@@ -102,6 +102,18 @@ jobs:
       - name: Run
         run: cargo bench --bench boot
 
+  container:
+    name: Container with limits (256 MiB, 1 CPU)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the example service
+        run: cargo build --release --example service
+      - name: Run it in a container
+        run: bash .github/scripts/container-test.sh
+
   loom:
     name: Loom (urgent line, heartbeats)
     runs-on: ubuntu-latest

@@ -88,7 +88,8 @@ Requires: sys-lib 0.4.0 (published 2026-10-30).
 
 ## v0.8.0 - Alpha
 Exit: two real consumers boot on it on every listed environment.
-- [ ] Used by WASP's boot and a Hive DB start-up on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, and a Docker container with limits.
+- [ ] Used by WASP's boot and a Hive DB start-up on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, and a Docker container with limits. **Blocked (2026-11-02):** neither consumer depends on the suite yet: no `Cargo.toml` outside this repository names it. The suite cannot meet this exit by itself; a consumer has to adopt it.
+- [x] The environments the suite can reach by itself, with `examples/service.rs` standing in until a consumer does: Windows, Linux, and macOS in CI, and a container limited to 256 MiB and 1 CPU, run as a user with no entry in the user database (`.github/scripts/container-test.sh`, D-083).
 - [ ] API review against real use; changes made now, not after 1.0.
 
 ## v0.9.0 - Beta and release candidates

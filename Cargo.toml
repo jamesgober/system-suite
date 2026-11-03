@@ -217,6 +217,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 # BENCHMARKS
 # #################################
 # The boot benchmark harness (D-068): std only, `harness = false`.
+[[example]]
+name = "service"
+required-features = ["kernel", "sys", "config"]
+
 [[bench]]
 name = "boot"
 harness = false

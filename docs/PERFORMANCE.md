@@ -31,7 +31,7 @@ Machine: AMD Ryzen 9 9950X3D (16 cores). Linux: Ubuntu under WSL2, kernel 6.6.87
 | snapshot read (`Reader::get`, unchanged) | about 1 ns | 0.35 ns | 0.30 ns |
 | heap held by a booted system | under 256 KiB | 98 KiB | 99 KiB |
 
-Measured again for 0.7.1 on a busy machine: 0.6.0 and 0.7.1, run alternately, could not be told apart, so the baselines stand. macOS has no reference machine; CI runs the benchmark there on every push, without a gate. Every target is met. The measured boot is with `process_wide(false)` and no single-instance lock, so it leaves out the signal intake and the lock; both are one system call each and a thread start.
+Measured again for 0.7.1 on a busy machine: 0.6.0 and 0.7.1, run alternately, could not be told apart, so the baselines stand. macOS has no reference machine; CI runs the benchmark there on every push, without a gate. On a shared macOS runner (0.7.1): boot 0.12 ms, stop 0.17 ms, 86 KiB of heap, and 0.1 ms of CPU time over 5 idle seconds, one wake of the benchmark's own sleep at that resolution. Every target is met. The measured boot is with `process_wide(false)` and no single-instance lock, so it leaves out the signal intake and the lock; both are one system call each and a thread start.
 
 ## How it is measured
 
@@ -55,7 +55,7 @@ SYSTEM_SUITE_BENCH_WRITE=benches/baseline/linux-x86_64.txt cargo bench --bench b
 | Operation | Cost | Where |
 |---|---|---|
 | a reload | the file read and parse, plus each subsystem's preparation | `System::reload` |
-| one memory watermark reading | 10 µs on Linux, 1.9 µs on Windows (medians); at `memory_watch = "5s"`, about 2 parts per million of one core and 0.2 wake-ups per second | only with `[kernel] memory_watch` set |
+| one memory watermark reading | 10 µs on Linux, 8 µs on macOS, 1.9 µs on Windows (medians); at `memory_watch = "5s"`, about 2 parts per million of one core and 0.2 wake-ups per second | only with `[kernel] memory_watch` set |
 | `AuditLog::record` with `sync = "every"` | one `fdatasync` (milliseconds on rotating disks, tens of microseconds on NVMe) | per record |
 | `Secret::with` | key-vault's read path (defragment into a wiped scratch buffer) | per read |
 | `System::health` | one `Vec` and the reasons; `status` allocates nothing of its own | per call |
