@@ -50,6 +50,23 @@ SYSTEM_SUITE_BENCH_BASELINE=benches/baseline/linux-x86_64.txt cargo bench --benc
 SYSTEM_SUITE_BENCH_WRITE=benches/baseline/linux-x86_64.txt cargo bench --bench boot
 ```
 
+## The pre-1.0 tuning pass
+
+Where a boot and a stop spend their time, measured step by step (`System::boot_timeline`, and the teardown timed in a copy of the code), Linux, release profile, 300 boots after 20 to warm up (medians):
+
+| Boot step | Time | | Shutdown step | Time |
+|---|---|---|---|---|
+| 3 paths | 5.5 µs | | 1 draining | 2 µs |
+| 4 environment | 4.7 µs | | 2 subsystems (none) | 0 µs |
+| 5 configuration | 41.9 µs | | 3 workers and timers | 1 µs |
+| 6 guard | 30.5 µs | | 9 logging | 107 µs |
+| 10 logging | 25.9 µs | | every other step | under 1 µs |
+| every other step | under 1.5 µs each | | | |
+
+- **Fixed:** with any timer armed (the memory watermark, `[audit] sync = "flush"`, the systemd keep-alive), stopping the timer thread polled with 1 ms sleeps, so a stop took 1.3 to 2.0 ms instead of about 0.2 ms. It now waits on a channel the thread disconnects when it ends: 0.15 to 0.25 ms (median, same machine, alternating runs).
+- **Kept:** closing the log is most of a stop because it runs on its own stop thread, which is what keeps a blocked sink (a full pipe on standard error) from holding the process past its deadline (threat T6). The thread start is the cost, about 0.1 ms once per process; there is no `fsync`. Configuration, guard, and logging are the members' own file work (finding, checking, and reading the file; the umask and limits; creating the log file).
+- **Nothing to gain on the hot path:** the urgent-line check and an unchanged snapshot read are a single atomic load each (0.2 and 0.35 ns).
+
 ## Costs that stay
 
 | Operation | Cost | Where |
