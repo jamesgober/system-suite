@@ -48,6 +48,11 @@ What the suite defends against, how, what each defence costs, and the test that 
 | an existing audit chain file another user can change is refused before it is resumed | one `fstat` at boot | 0.7 (D-078) |
 | a panicking signal handler does not end the signal intake; reloads and dumps run off the signal thread | one short-lived thread per reload or dump | 0.7 (D-075) |
 | no secret outlives the shutdown: a reload that finishes after the vault was wiped has its values removed at once | one atomic load per reload | 0.7 (D-077) |
+| a `Lockdown` is lowered only by naming it (`shift`), and lifting one is audited | none | 0.8 (D-084) |
+| only the kernel publishes kernel events; application code can listen, never forge one | none | 0.8 (D-085) |
+| each urgent change, its epoch, and its reason are one ordered step, so the audit names the change that happened; a same-level `set` changes nothing, and reasons are cut to 256 bytes, so a caller cannot flood the log and the audit chain or copy megabytes to every mailbox | one uncontended lock per change; readers take none | 0.9 polish (D-089) |
+| the shutdown's own audit record is bounded by the deadline, and a reload in progress finishes before the subsystems stop; a shutdown nobody requested still refuses new reloads | one thread at shutdown when audit is on | 0.9 polish (D-089) |
+| a flood of reload or dump signals runs one thread at a time, later signals folded into one more run | two atomics per signal | 0.9 polish (D-089) |
 
 ## Known limits
 
@@ -56,7 +61,7 @@ Each is recorded with its reason in the decision log (D-079).
 | Limit | Why it stays |
 |---|---|
 | `.env` values, `env:` secrets among them, stay in env-lib's map in ordinary memory for the life of the process | the same exposure as the process environment, which the suite never changes; a secret that must be wiped belongs in a `file:` or `vault:` reference |
-| on Unix, without the `sys` feature or when the user lookup fails, the owner check is skipped and only the mode check (no group or other write bit) applies | reading the user id is an OS call that belongs in sys-lib; the owner-only directories still apply |
+| on Unix, without the `sys` feature, the owner check is skipped and only the mode check (no group or other write bit) applies | reading the user id is an OS call that belongs in sys-lib. With `sys` (a default feature) it applies even to a user with no entry in the user database, which sys-lib 0.4 reports by number on Linux; the container test runs as such a user |
 | the panic hook the application installs after boot is replaced at shutdown by the one from before boot | the standard library keeps one process-wide hook and cannot tell whose it is; install yours before boot (the suite's hook calls it) |
 | members' set-once global slots (the global logger, the global metrics registry) stay installed after a boot that failed after setting them | the members allow setting them once; a failed boot ends the process in every documented use |
 | event handlers run on the thread that tears down, outside the shutdown deadline | they are the application's code and must return quickly; bounding each would cost a thread per event |

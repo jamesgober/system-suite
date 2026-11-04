@@ -260,18 +260,20 @@ impl UrgentLine {
         }
     }
 
-    /// Raises the level to `Shed` or `Lockdown` (or announces the current
-    /// level again with a new reason) and returns the new epoch. Every
-    /// subsystem's mailbox is poked and the change is logged and counted.
-    /// It never lowers the level: a `Lockdown` set by the security package
-    /// cannot be undone by a `set(Normal)` from anywhere else (D-084).
+    /// Raises the level to `Shed` or `Lockdown` and returns the new epoch.
+    /// Every subsystem's mailbox is poked and the change is logged and
+    /// counted. It never lowers the level: a `Lockdown` set by the security
+    /// package cannot be undone by a `set(Normal)` from anywhere else
+    /// (D-084). Setting the level the line is already at changes nothing
+    /// and returns the current epoch, so a caller that sets `Lockdown` on
+    /// every bad request costs one atomic read after the first (D-089).
     ///
     /// # Errors
     ///
     /// [`ErrorKind::UrgentRefused`] for `Draining` or `Stopping` (use a stop
     /// request), for a level below the current one (use
-    /// [`shift`](Self::shift)), and for any change once a stop was
-    /// requested.
+    /// [`shift`](Self::shift)), for any change once a stop was requested,
+    /// and for a change made from inside a handler of an urgent change.
     pub fn set(&self, level: Level, reason: impl Into<Cow<'static, str>>) -> Result<u64, Error> {
         if level >= Level::Draining {
             return Err(Error::new(
@@ -280,18 +282,31 @@ impl UrgentLine {
                 "request a stop instead (Kernel::request_stop)",
             ));
         }
-        match self.line.word.try_raise(level as u8) {
-            Ok(previous) => Ok(self.announce(Level::from_u8(previous), reason.into())),
-            Err(current) if current >= Level::Draining as u8 => Err(stopping()),
-            Err(current) => Err(Error::new(
-                ErrorKind::UrgentRefused,
-                format!(
-                    "the urgent line is at {}; set never lowers it",
-                    Level::from_u8(current)
-                ),
-                "lower it with shift(from, to), naming the level it is at",
-            )),
+        if self.line.word.level() == level as u8 {
+            return Ok(self.epoch());
         }
+        refuse_inside_a_handler()?;
+        let reason = cap_reason(reason.into());
+        let notice = {
+            let mut last = self.lock_last();
+            match self.line.word.try_raise(level as u8) {
+                Ok(previous) if previous == level as u8 => return Ok(self.epoch()),
+                Ok(previous) => self.record(&mut last, level, Level::from_u8(previous), reason),
+                Err(current) if current >= Level::Draining as u8 => return Err(stopping()),
+                Err(current) => {
+                    return Err(Error::new(
+                        ErrorKind::UrgentRefused,
+                        format!(
+                            "the urgent line is at {}; set never lowers it",
+                            Level::from_u8(current)
+                        ),
+                        "lower it with shift(from, to), naming the level it is at",
+                    ));
+                }
+            }
+        };
+        self.deliver(&notice);
+        Ok(notice.epoch)
     }
 
     /// Moves the line from exactly `from` to `to` (both `Normal`, `Shed`, or
@@ -301,8 +316,9 @@ impl UrgentLine {
     /// # Errors
     ///
     /// [`ErrorKind::UrgentRefused`] when `from` or `to` is `Draining` or
-    /// `Stopping`, or when the line is not at `from` (it names the level
-    /// it is at).
+    /// `Stopping`, when the line is not at `from` (it names the level it is
+    /// at), and for a change made from inside a handler of an urgent
+    /// change.
     pub fn shift(
         &self,
         from: Level,
@@ -316,51 +332,88 @@ impl UrgentLine {
                 "request a stop instead (Kernel::request_stop)",
             ));
         }
-        match self.line.word.level.compare_exchange(
-            from as u8,
-            to as u8,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => Ok(self.announce(from, reason.into())),
-            Err(current) if current >= Level::Draining as u8 => Err(stopping()),
-            Err(current) => Err(Error::new(
-                ErrorKind::UrgentRefused,
-                format!(
-                    "the urgent line is at {}, not {from}",
-                    Level::from_u8(current)
-                ),
-                "read the level again and decide with what is there now",
-            )),
-        }
+        refuse_inside_a_handler()?;
+        let reason = cap_reason(reason.into());
+        let notice = {
+            let mut last = self.lock_last();
+            match self.line.word.level.compare_exchange(
+                from as u8,
+                to as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => self.record(&mut last, to, from, reason),
+                Err(current) if current >= Level::Draining as u8 => return Err(stopping()),
+                Err(current) => {
+                    return Err(Error::new(
+                        ErrorKind::UrgentRefused,
+                        format!(
+                            "the urgent line is at {}, not {from}",
+                            Level::from_u8(current)
+                        ),
+                        "read the level again and decide with what is there now",
+                    ));
+                }
+            }
+        };
+        self.deliver(&notice);
+        Ok(notice.epoch)
     }
 
     /// Raises the line to `level` (never lowers it): the kernel's way to
     /// `Draining` and `Stopping`. Returns `false` if it was already there.
     pub(crate) fn raise(&self, level: Level, reason: &'static str) -> bool {
-        let previous = self.line.word.raise(level as u8);
-        if previous >= level as u8 {
-            return false;
-        }
-        let _epoch = self.announce(Level::from_u8(previous), Cow::Borrowed(reason));
+        let notice = {
+            let mut last = self.lock_last();
+            let previous = self.line.word.raise(level as u8);
+            if previous >= level as u8 {
+                return false;
+            }
+            self.record(
+                &mut last,
+                level,
+                Level::from_u8(previous),
+                Cow::Borrowed(reason),
+            )
+        };
+        self.deliver(&notice);
         true
     }
 
-    /// Records the reason, bumps the epoch, and delivers the notice to
-    /// every mailbox and the observer.
-    fn announce(&self, previous: Level, reason: Cow<'static, str>) -> u64 {
-        *self
-            .line
+    /// The change's lock. Every change of the level happens under it,
+    /// together with its epoch and its reason, so a notice always describes
+    /// the change that made it, and epochs follow the order of the changes
+    /// (D-089). Readers never take it.
+    fn lock_last(&self) -> std::sync::MutexGuard<'_, (Level, Cow<'static, str>)> {
+        self.line
             .reason
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = (previous, reason.clone());
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Bumps the epoch and records the reason for a change just made
+    /// (under the change's lock), and returns its notice.
+    fn record(
+        &self,
+        last: &mut (Level, Cow<'static, str>),
+        level: Level,
+        previous: Level,
+        reason: Cow<'static, str>,
+    ) -> Notice {
         let epoch = self.line.word.bump();
-        let notice = Notice {
-            level: self.level(),
+        *last = (previous, reason.clone());
+        Notice {
+            level,
             previous,
             epoch,
             reason,
-        };
+        }
+    }
+
+    /// Delivers a notice to every mailbox and the observer, outside the
+    /// change's lock. A handler that tries to change the line from in here
+    /// is refused, so it cannot recurse until the stack overflows.
+    fn deliver(&self, notice: &Notice) {
         let mailboxes = self
             .line
             .mailboxes
@@ -371,9 +424,10 @@ impl UrgentLine {
             mailbox.post(notice.clone());
         }
         if let Some(observer) = self.line.observer.get() {
-            observer(&notice);
+            DELIVERING.with(|d| d.set(d.get() + 1));
+            observer(notice);
+            DELIVERING.with(|d| d.set(d.get() - 1));
         }
-        epoch
     }
 
     /// A checkpoint helper that remembers the last epoch it saw.
@@ -400,6 +454,40 @@ impl UrgentLine {
         // A second observer is ignored; the kernel installs exactly one.
         let _first = self.line.observer.set(observer).is_ok();
     }
+}
+
+/// The longest reason kept, in bytes: a reason goes to every mailbox, the
+/// log, and the audit chain, so a megabyte from a caller must not be
+/// copied to each (D-089).
+pub(crate) const MAX_REASON: usize = 256;
+
+/// `reason`, cut to [`MAX_REASON`] bytes on a character boundary.
+pub(crate) fn cap_reason(reason: Cow<'static, str>) -> Cow<'static, str> {
+    if reason.len() <= MAX_REASON {
+        return reason;
+    }
+    let mut end = MAX_REASON;
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    Cow::Owned(reason[..end].to_owned())
+}
+
+std::thread_local! {
+    /// How deep this thread is in delivering urgent changes.
+    static DELIVERING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Refuses a change made while this thread delivers one.
+fn refuse_inside_a_handler() -> Result<(), Error> {
+    if DELIVERING.with(std::cell::Cell::get) > 0 {
+        return Err(Error::new(
+            ErrorKind::UrgentRefused,
+            "the urgent line cannot be changed from inside a handler of an urgent change",
+            "change it from another thread, or after the handler returns",
+        ));
+    }
+    Ok(())
 }
 
 /// The refusal for any change once a stop was requested.
@@ -477,11 +565,12 @@ mod tests {
             assert_eq!(error.map(|e| e.kind()), Some(ErrorKind::UrgentRefused));
         }
         assert_eq!(line.level(), Level::Lockdown);
-        // The same level again is a new reason, not a change of level.
+        // The same level again changes nothing, not even the reason.
         assert_eq!(
             line.set(Level::Lockdown, "still under attack").ok(),
-            Some(2)
+            Some(1)
         );
+        assert_eq!(line.notice().reason, "breach");
         // shift needs the level the line is at.
         let wrong = line.shift(Level::Shed, Level::Normal, "guess").err();
         assert_eq!(wrong.map(|e| e.kind()), Some(ErrorKind::UrgentRefused));
@@ -493,6 +582,74 @@ mod tests {
         assert_eq!(line.level(), Level::Shed);
         let stop = line.shift(Level::Shed, Level::Draining, "no");
         assert!(stop.is_err());
+    }
+
+    #[test]
+    fn test_a_long_reason_is_cut_on_a_character_boundary() {
+        let line = UrgentLine::detached();
+        let long = "\u{e9}".repeat(1_000);
+        assert!(line.set(Level::Shed, long).is_ok());
+        let reason = line.notice().reason;
+        assert!(reason.len() <= MAX_REASON && reason.len() >= MAX_REASON - 1);
+        assert!(reason.chars().all(|c| c == '\u{e9}'));
+    }
+
+    #[test]
+    fn test_concurrent_changes_are_reported_as_they_happened() {
+        // Two threads raise and lift a lockdown; every notice must name the
+        // level its own change reached, which the audit relies on.
+        let line = UrgentLine::detached();
+        let seen: Arc<Mutex<Vec<(u64, Level, Level)>>> = Arc::default();
+        let sink = Arc::clone(&seen);
+        line.observe(Box::new(move |notice| {
+            sink.lock().unwrap_or_else(PoisonError::into_inner).push((
+                notice.epoch,
+                notice.previous,
+                notice.level,
+            ));
+        }));
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let line = line.clone();
+                thread::spawn(move || {
+                    for _ in 0..2_000 {
+                        let _raised = line.set(Level::Lockdown, "raise");
+                        let _lifted = line.shift(Level::Lockdown, Level::Normal, "lift");
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            assert!(worker.join().is_ok());
+        }
+        // Delivery may interleave; in epoch order the notices must chain:
+        // each one starts where the one before ended.
+        let mut seen = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        seen.sort_unstable_by_key(|(epoch, _, _)| *epoch);
+        for (epoch, (at, previous, level)) in seen.iter().enumerate() {
+            assert_eq!(*at, epoch as u64 + 1, "an epoch was skipped or repeated");
+            assert_ne!(previous, level, "a notice that changed nothing");
+        }
+        for pair in seen.windows(2) {
+            assert_eq!(pair[1].1, pair[0].2, "notices do not chain: {pair:?}");
+        }
+    }
+
+    #[test]
+    fn test_a_handler_cannot_change_the_line() {
+        let line = UrgentLine::detached();
+        let refused = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&refused);
+        let inner = line.clone();
+        line.observe(Box::new(move |_notice| {
+            if inner.set(Level::Lockdown, "again").is_err() {
+                let _seen = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+        assert!(line.set(Level::Shed, "first").is_ok());
+        assert_eq!(refused.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(line.level(), Level::Shed);
+        assert!(line.set(Level::Lockdown, "outside").is_ok());
     }
 
     #[test]

@@ -269,22 +269,19 @@ impl System {
             // Both run off the signal thread, so a slow dump or reload never
             // holds up a stop signal behind it.
             let dump = foundation.clone();
+            let dumps = Coalesce::new("system-suite-dump");
             intake.set_dump(Box::new(move || {
                 let dump = dump.clone();
-                let _spawned = std::thread::Builder::new()
-                    .name("system-suite-dump".to_owned())
-                    .spawn(move || write_dump(&dump));
+                dumps.run(move || write_dump(&dump));
             }));
             #[cfg(feature = "config")]
             if let Some(reloader) = &parts.reloader {
                 let reloader = Arc::clone(reloader);
+                let reloads = Coalesce::new("system-suite-reload");
                 intake.set_reload(Box::new(move || {
                     let reloader = Arc::clone(&reloader);
-                    // The outcome is logged and counted by the reloader;
-                    // reloads are serialised inside it.
-                    let _spawned = std::thread::Builder::new()
-                        .name("system-suite-reload".to_owned())
-                        .spawn(move || drop(reloader.reload()));
+                    // The outcome is logged and counted by the reloader.
+                    reloads.run(move || drop(reloader.reload()));
                 }));
             }
         }
@@ -721,6 +718,62 @@ pub(crate) fn foundation_from(parts: &mut Parts) -> Result<Foundation, Error> {
     })
 }
 
+/// Runs signal-triggered work off the signal thread, one run at a time: a
+/// signal that arrives while a run is going asks for one more run, so a
+/// flood of SIGHUP starts one thread, not one per signal (D-089).
+#[cfg(feature = "signals")]
+struct Coalesce {
+    name: &'static str,
+    pending: Arc<std::sync::atomic::AtomicBool>,
+    active: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(feature = "signals")]
+impl Coalesce {
+    fn new(name: &'static str) -> Coalesce {
+        Coalesce {
+            name,
+            pending: Arc::default(),
+            active: Arc::default(),
+        }
+    }
+
+    fn run<F>(&self, work: F)
+    where
+        F: Fn() + Send + 'static,
+    {
+        use std::sync::atomic::Ordering::AcqRel;
+
+        self.pending
+            .store(true, std::sync::atomic::Ordering::Release);
+        if self.active.swap(true, AcqRel) {
+            return;
+        }
+        let (pending, active) = (Arc::clone(&self.pending), Arc::clone(&self.active));
+        let spawned = std::thread::Builder::new()
+            .name(self.name.to_owned())
+            .spawn(move || {
+                loop {
+                    while pending.swap(false, AcqRel) {
+                        work();
+                    }
+                    active.store(false, std::sync::atomic::Ordering::Release);
+                    // A signal between the last check and the store above
+                    // set `pending` and saw `active` still set: run it.
+                    if !pending.load(std::sync::atomic::Ordering::Acquire)
+                        || active.swap(true, AcqRel)
+                    {
+                        break;
+                    }
+                }
+            });
+        if spawned.is_err() {
+            self.active
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 /// The dump signal's output: one log line with the system's state and its
 /// health, component by component.
 #[cfg(feature = "signals")]
@@ -753,6 +806,41 @@ fn write_dump(foundation: &Foundation) {
 mod tests {
     use super::*;
     use crate::{ErrorKind as Kind, Member};
+
+    #[cfg(feature = "signals")]
+    #[test]
+    fn test_a_signal_flood_runs_one_thread_at_a_time() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let runs = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(AtomicUsize::new(0));
+        let overlap = Arc::new(AtomicUsize::new(0));
+        let coalesce = Coalesce::new("test-coalesce");
+        for _ in 0..1_000 {
+            let (runs, running, overlap) = (
+                Arc::clone(&runs),
+                Arc::clone(&running),
+                Arc::clone(&overlap),
+            );
+            coalesce.run(move || {
+                if running.fetch_add(1, Ordering::SeqCst) > 0 {
+                    let _seen = overlap.fetch_add(1, Ordering::SeqCst);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                let _done = runs.fetch_add(1, Ordering::SeqCst);
+                let _left = running.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while coalesce.active.load(Ordering::Acquire) && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(overlap.load(Ordering::SeqCst), 0, "two runs overlapped");
+        let runs = runs.load(Ordering::SeqCst);
+        // The signals folded into a handful of runs, and the last one ran.
+        assert!((1..100).contains(&runs), "{runs} runs");
+        assert!(!coalesce.pending.load(Ordering::Acquire));
+    }
 
     fn quiet(name: &str) -> Builder {
         let builder = Builder::new(name).process_wide(false).disable(Member::Log);

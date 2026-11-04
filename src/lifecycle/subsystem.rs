@@ -240,6 +240,9 @@ pub struct Mailbox {
 struct MailboxInner {
     latest: Mutex<Option<Notice>>,
     posted: Condvar,
+    /// The highest epoch posted: a notice delivered late (an older change
+    /// that lost the race to deliver) never replaces a newer one.
+    newest: std::sync::atomic::AtomicU64,
 }
 
 impl Mailbox {
@@ -251,7 +254,16 @@ impl Mailbox {
     }
 
     pub(crate) fn post(&self, notice: Notice) {
-        *self.lock() = Some(notice);
+        let mut latest = self.lock();
+        let newest = self
+            .inner
+            .newest
+            .fetch_max(notice.epoch, std::sync::atomic::Ordering::AcqRel);
+        if newest >= notice.epoch && newest != 0 {
+            return;
+        }
+        *latest = Some(notice);
+        drop(latest);
         self.inner.posted.notify_all();
     }
 
@@ -461,7 +473,8 @@ mod tests {
     use crate::kernel::Level;
 
     fn notice(level: Level) -> Notice {
-        Notice::new(level, Level::Normal, 1, "test")
+        // Epochs follow the levels' order, as on a line that only rises.
+        Notice::new(level, Level::Normal, level as u64 + 1, "test")
     }
 
     #[test]
@@ -469,6 +482,8 @@ mod tests {
         let mailbox = Mailbox::new();
         mailbox.post(notice(Level::Shed));
         mailbox.post(notice(Level::Lockdown));
+        // A late, older notice does not replace the newer one.
+        mailbox.post(notice(Level::Normal));
         assert_eq!(mailbox.try_take().map(|n| n.level), Some(Level::Lockdown));
         assert!(mailbox.try_take().is_none());
     }

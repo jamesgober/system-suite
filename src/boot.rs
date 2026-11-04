@@ -193,6 +193,13 @@ impl Parts {
         // 1. Draining: every worker and subsystem learns of the stop at once.
         #[cfg(feature = "kernel")]
         {
+            // A shutdown nobody requested (`System::shutdown`, a drop) is
+            // still a stop: a reload checks for one and gives way (D-089).
+            let _first = self
+                .kernel
+                .stop_for(crate::lifecycle::StopReason::Requested {
+                    reason: std::borrow::Cow::Borrowed("shutdown"),
+                });
             self.kernel.set_phase(Phase::Draining);
             let _raised = self
                 .kernel
@@ -209,23 +216,39 @@ impl Parts {
             self.notify("STATUS=stopping");
         }
         self.log.info("stopping", &[("cause", Val::Str(cause))]);
+        // The stop's own record syncs to disk, so it is bounded like every
+        // other step: a hung disk cannot hold the shutdown here (T6).
         #[cfg(feature = "audit")]
-        if let Some(audit) = &self.audit
-            && audit.is_enabled()
-            && let Err(error) = audit.record("kernel", "stop", cause, audit_trail::Outcome::Success)
-        {
-            self.log.error(
-                "the stop could not be audited",
-                &[("error", Val::Str(&error.to_string()))],
-            );
+        if let Some(audit) = self.audit.clone().filter(crate::AuditLog::is_enabled) {
+            let log = self.log.clone();
+            let cause = crate::kernel::cap_reason(std::borrow::Cow::Owned(cause.to_owned()));
+            let outcome = run_with_deadline("audit-stop", deadline, move || {
+                if let Err(error) =
+                    audit.record("kernel", "stop", &cause, audit_trail::Outcome::Success)
+                {
+                    log.error(
+                        "the stop could not be audited",
+                        &[("error", Val::Str(&error.to_string()))],
+                    );
+                }
+            });
+            code = self.account("audit-stop", outcome, code);
         }
 
-        // 2. Subsystems, in reverse of their start order.
+        // 2. Subsystems, in reverse of their start order, once no reload is
+        //    committing to them: the stop reason above refuses new ones.
         #[cfg(feature = "kernel")]
         {
             let subsystems_deadline = began
                 .checked_add(budget.saturating_sub(reserve))
                 .unwrap_or(began);
+            #[cfg(feature = "config")]
+            if let Some(reloader) = self.reloader.clone() {
+                let outcome = run_with_deadline("reload", subsystems_deadline, move || {
+                    reloader.wait_idle();
+                });
+                code = self.account("reload", outcome, code);
+            }
             code = self.stop_subsystems(subsystems_deadline, deadline, code);
         }
 
@@ -404,7 +427,11 @@ impl Parts {
         code
     }
 
-    #[cfg(feature = "signals")]
+    #[cfg(any(
+        feature = "signals",
+        feature = "audit",
+        all(feature = "kernel", feature = "config")
+    ))]
     fn account(&self, step: &'static str, outcome: Outcome, code: u8) -> u8 {
         match outcome {
             Outcome::Done(_) => code,

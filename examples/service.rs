@@ -23,6 +23,7 @@ fn main() -> ExitCode {
 
     let worker = Worker::new("load").spawn(system.runtime(), |cx| {
         let mut watch = cx.urgent().watch();
+        println!("urgent level: {}", watch.level());
         while !cx.should_stop() {
             if let Some(level) = watch.changed() {
                 println!("urgent level: {level}");

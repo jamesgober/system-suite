@@ -38,6 +38,23 @@ the breaking changes are made before 1.0.
 
 ### Fixed
 
+- Urgent changes from several threads could be reported with the wrong
+  level, so the audit could record a lifted lockdown as a raise; every
+  change, its epoch, and its reason are now one ordered step, and a
+  mailbox never replaces a newer notice with an older one.
+- A same-level `set` changes nothing (it used to log, audit, and notify
+  again); reasons are cut to 256 bytes.
+- A handler of an urgent change that changed the line recursed until the
+  stack overflowed; such a change is now refused.
+- The shutdown's own audit record is bounded by the deadline; a reload in
+  progress finishes before the subsystems stop, and a shutdown nobody
+  requested refuses new reloads.
+- A flood of reload or dump signals spawned a thread per signal; one runs
+  at a time now.
+- `Backoff::Fixed(Duration::MAX)` restarted at once; a delay that cannot be
+  added to now waits for the stop.
+- A `memory_shed` of 5 or less never cleared.
+- Names ending in '.' are refused (Windows drops the dot).
 - Stopping a runtime with any timer armed (the memory watermark,
   `[audit] sync = "flush"`, the systemd keep-alive) polled the timer thread
   with 1 ms sleeps, so a stop took 1.3 to 2.0 ms; it now waits on a

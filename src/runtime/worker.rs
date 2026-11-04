@@ -284,16 +284,23 @@ where
             reason,
         });
         shared.set_state(WorkerState::BackingOff);
+        // A delay too long to add to now (`Duration::MAX`) waits until the
+        // stop instead of restarting at once (D-089).
         let wake_at = Instant::now().checked_add(policy.backoff.delay(attempt));
-        while let Some(wake_at) = wake_at {
+        loop {
             if cx.should_stop() {
                 break;
             }
-            let left = wake_at.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
+            match wake_at {
+                Some(wake_at) => {
+                    let left = wake_at.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    thread::park_timeout(left);
+                }
+                None => thread::park(),
             }
-            thread::park_timeout(left);
         }
         if cx.should_stop() {
             break;
@@ -700,6 +707,24 @@ mod tests {
                 .is_some_and(|h| wait_for(h, WorkerState::Failed))
         );
         assert_eq!(handle.map(|h| h.health().status()), Some(Status::Unhealthy));
+    }
+
+    #[test]
+    fn test_a_backoff_too_long_to_add_waits_for_the_stop() {
+        let rt = runtime();
+        let handle = Worker::new("patient")
+            .backoff(Backoff::Fixed(Duration::MAX))
+            .spawn(&rt, |_| Err(Failure::new("down")))
+            .ok();
+        assert!(
+            handle
+                .as_ref()
+                .is_some_and(|h| wait_for(h, WorkerState::BackingOff))
+        );
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(handle.as_ref().map(WorkerHandle::restarts), Some(1));
+        let late = rt.stop(Instant::now() + Duration::from_secs(5));
+        assert!(late.is_empty(), "{late:?}");
     }
 
     #[test]

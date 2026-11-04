@@ -40,6 +40,8 @@ mod urgent;
 #[cfg(feature = "registry")]
 pub use events::{Event, EventGuard, EventId, Events};
 pub use health::{Component, ComponentHealth, Health, HealthReport, Status};
+#[cfg(feature = "audit")]
+pub(crate) use urgent::cap_reason;
 pub use urgent::{Level, Notice, UrgentLine, Watch};
 
 /// The kernel's control handle.
@@ -186,7 +188,7 @@ impl Kernel {
     /// blocks.
     pub fn request_stop(&self, reason: impl Into<Cow<'static, str>>) -> bool {
         self.stop_for(StopReason::Requested {
-            reason: reason.into(),
+            reason: urgent::cap_reason(reason.into()),
         })
     }
 
@@ -196,7 +198,7 @@ impl Kernel {
     /// Returns `false` if a stop was already requested.
     pub fn request_supervisor_stop(&self, reason: impl Into<String>) -> bool {
         self.stop_for(StopReason::Supervisor {
-            reason: reason.into(),
+            reason: urgent::cap_reason(reason.into().into()).into_owned(),
         })
     }
 
