@@ -33,7 +33,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! system-suite = { version = "0.7", default-features = false, features = ["sys"] }
+//! system-suite = { version = "0.8", default-features = false, features = ["sys"] }
 //! ```
 //!
 //! ```ignore

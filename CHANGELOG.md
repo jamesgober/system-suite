@@ -11,7 +11,11 @@
 
 ## [Unreleased]
 
-API review against the planned consumers (WASP's boot, Hive DB start-ups):
+## [0.8.0] - 2026-11-06
+
+The alpha: the API reviewed against the planned consumers, JSON through
+James's own jsonx-lib, and the first pre-1.0 pass over the suite and the
+members released for it. API review against the planned consumers (WASP's boot, Hive DB start-ups):
 the breaking changes are made before 1.0.
 
 ### Changed (breaking)
@@ -32,12 +36,24 @@ the breaking changes are made before 1.0.
 
 ### Added
 
+- `config-json`: `<name>.json` configuration files, through config-lib
+  1.2's JSON backend on jsonx-lib (not serde_json). A repeated key is
+  refused.
+- `metrics-json` and `metrics-otlp`: metrics-lib 2.1's JSON and OTLP
+  exporters on jsonx-lib, without serde. With metrics-lib 2.1.1 and
+  jsonx-lib 0.5.1, a snapshot is written in about two thirds of
+  serde_json's time, with the same text.
 - `Kernel::request_supervisor_stop`: a stop whose reason is
   `StopReason::Supervisor`.
 - `EventGuard` and `EventId`.
 
 ### Fixed
 
+- An audit field holding the byte `0x1f` is recorded with U+FFFD in its
+  place; audit-trail 1.2 refuses that byte, which would have let text
+  from a request keep its record out of the chain.
+- Members: signal-mod 2.1.1 and audit-trail 1.2.0, from their pre-1.0
+  review (see their changelogs).
 - Urgent changes from several threads could be reported with the wrong
   level, so the audit could record a lifted lockdown as a raise; every
   change, its epoch, and its reason are now one ordered step, and a
@@ -408,7 +424,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/jamesgober/system-suite/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jamesgober/system-suite/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jamesgober/system-suite/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jamesgober/system-suite/compare/v0.5.0...v0.6.0

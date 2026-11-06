@@ -708,12 +708,49 @@ limit = 2
 // Audit (boot step 13)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "metrics-json")]
+#[test]
+fn test_metrics_render_as_json() {
+    let root = Root::new("metrics-json");
+    let system = quiet("kernel-metrics-json", &root).start().unwrap();
+    system.metrics().registry().counter("jobs_done").inc();
+    let text = system_suite::metrics::exporters::json::to_json(system.metrics().registry());
+    assert!(text.contains("jobs_done"), "{text}");
+    #[cfg(feature = "metrics-otlp")]
+    {
+        let otlp =
+            system_suite::metrics::exporters::otlp::to_json(system.metrics().registry(), "svc");
+        assert!(otlp.contains("jobs_done"), "{otlp}");
+    }
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
 #[cfg(feature = "audit")]
 fn audit_file(root: &Root, name: &str) -> PathBuf {
     root.path()
         .join("data")
         .join("audit")
         .join(format!("{name}.audit"))
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_separator_in_a_field_is_still_recorded() {
+    use system_suite::audit::Outcome;
+
+    // audit-trail refuses its field separator inside a field; a caller
+    // passing request text must not be able to keep its record out.
+    let root = Root::new("audit-separator");
+    let system = quiet("kernel-audit-sep", &root).start().unwrap();
+    let id = system
+        .audit()
+        .record("eve\u{1f}admin", "user.delete", "user:9", Outcome::Failure)
+        .unwrap();
+    assert_eq!(id.as_u64(), 0);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    // The next boot verifies the chain, record included.
+    let system = quiet("kernel-audit-sep", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
 
 #[cfg(feature = "audit")]

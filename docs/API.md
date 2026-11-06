@@ -94,11 +94,11 @@ Costs are estimates (marked [est.]) until they are measured in `0.6.0`; measured
 
 ```toml
 [dependencies]
-system-suite = "0.7"
+system-suite = "0.8"
 
 [build-dependencies]
 # Only for build info (the build commit, time, and profile in the first log line).
-system-suite = { version = "0.7", default-features = false, features = ["sys"] }
+system-suite = { version = "0.8", default-features = false, features = ["sys"] }
 ```
 
 ```rust,ignore
@@ -130,13 +130,13 @@ Every member is behind its own feature, and every feature is additive: turning o
 | `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1.1 | application and OS directories, owner-only where the suite writes | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
-| `config` | yes | config-lib 1.1, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
+| `config` | yes | config-lib 1.2, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2.1 | structured logging, the crash report's recent lines | none |
 | `metrics` | yes | metrics-lib 2 (counters, gauges, timers; no integrations) | the system's registry and the kernel's own metrics | none |
 | `signals` | yes | signal-mod 2, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
 | `time` | yes | clock-lib 1 | monotonic and wall clocks, a mockable `Clock` | none |
 | `ids` | yes | id-forge 1 | ULID, UUID, Snowflake | none |
-| `audit` | no (D-035) | audit-trail 1 with sha2 (implies `paths`) | tamper-evident audit chain | sha2 |
+| `audit` | no (D-035) | audit-trail 1.2 with sha2 (implies `paths`) | tamper-evident audit chain | sha2; libc (Unix, already brought by `signals`) |
 | `registry` | no | registry-io 1 (implies `kernel`) | kernel events delivered to callbacks | none |
 | `globals` | no | global-lib 1 | process-wide typed values; `system_suite::foundation()` | none |
 | `rand` | no | mod-rand 1 | OS CSPRNG and fast generators | none |
@@ -159,9 +159,11 @@ A member's own optional features are available through the suite, so a project s
 | `log-tracing` | log-io's `tracing`: `system_suite::log::compat::TracingLayer`, a `tracing-subscriber` layer that writes through log-io; the application adds it to its own subscriber (D-057) | tracing-core, tracing-subscriber | 0.4 |
 | `metrics-tracing` | metrics-lib's tracing integration | tracing | 0.4 |
 | `config-toml`, `config-noml` | config-lib's TOML and NOML formats: `<name>.toml`, `<name>.noml` (D-059) | noml, indexmap | 0.4 |
-| `config-json`, `config-xml` | config-lib's formats of the same names | serde_json; quick-xml | waiting on first-party crates (D-056) |
-| `config-validation` | config-lib's rule-based validation | regex | waiting on first-party crates (D-056) |
-| `metrics-otlp`, `metrics-json` | metrics-lib's OTLP rendering, JSON rendering | serde, serde_json | waiting on first-party crates (D-056) |
+| `config-json` | config-lib's JSON format on jsonx-lib (config-lib's `jsonx`): `<name>.json`. Strict: a repeated key is refused, depth and size budgets apply (D-090) | jsonx-lib | 0.8 |
+| `metrics-json` | metrics-lib's JSON exporter on jsonx-lib (metrics-lib's `json`): `metrics::exporters::json::to_json` and `to_json_pretty` (D-090) | jsonx-lib | 0.8 |
+| `metrics-otlp` | metrics-lib's OTLP exporter on jsonx-lib (metrics-lib's `otlp-json`): `metrics::exporters::otlp::to_json` and the protobuf encoding (D-090) | jsonx-lib | 0.8 |
+| `config-xml` | config-lib's XML format | quick-xml | waiting on a first-party crate (D-056) |
+| `config-validation` | config-lib's rule-based validation | regex | waiting on a first-party crate (D-056) |
 | `metrics-system` | metrics-lib's process metrics (`process_*`) and host health; `[metrics] process` | sysinfo (the BSDs only) | not accepted (D-056) |
 | `audit-blake3` | audit-trail's BLAKE3 hasher (selected with `[audit] hash = "blake3"`) | blake3 | 0.5 |
 | `registry-async` | registry-io's `AsyncRegistry` (runtime-agnostic futures, no executor) | futures-core | 0.5 |
@@ -169,7 +171,7 @@ A member's own optional features are available through the suite, so a project s
 
 Not passed through: anything that brings an async runtime (signal-mod's `tokio`, metrics-lib's `async`, config-lib's `async`, key-vault's TPM stub), and config-lib's `hot-reload` (an idle watcher thread; the suite reloads by signal or call).
 
-A pass-through marked "waiting on first-party crates" brings a third-party crate that James has held until a first-party crate covers the same ground (D-056); it is not added before then. A project can also reach any member feature directly: adding the member with the feature it wants (`metrics-lib = { version = "2", default-features = false, features = ["http"] }`) works too, because Cargo merges the features of one crate version, so `system_suite::metrics` gets it. The pass-through is the same thing without the second line and without having to match the member's version by hand.
+A pass-through marked "waiting on a first-party crate" brings a third-party crate that James has held until a first-party crate covers the same ground (D-056); it is not added before then. A project can also reach any member feature directly: adding the member with the feature it wants (`metrics-lib = { version = "2", default-features = false, features = ["http"] }`) works too, because Cargo merges the features of one crate version, so `system_suite::metrics` gets it. The pass-through is the same thing without the second line and without having to match the member's version by hand.
 
 ### Build info in `build.rs`
 
@@ -1651,7 +1653,7 @@ The first that applies wins:
 
 1. `Builder::config_file(path)` or `Builder::config_str(text)`;
 2. the `<NAME>_CONFIG` variable (from the process environment or the `.env` file);
-3. `<config dir>/<name>.conf` (with `config-toml` or `config-noml`, also `<name>.toml` or `<name>.noml`; finding two is a `ConfigInvalid` error naming both; the format follows the extension, D-059);
+3. `<config dir>/<name>.conf` (with `config-toml`, `config-noml`, or `config-json`, also `<name>.toml`, `<name>.noml`, or `<name>.json`; finding two is a `ConfigInvalid` error naming both; the format follows the extension, D-059);
 4. `./<name>.conf` (and the same alternatives) in the working directory, only when the process is not running as root or an administrator (a working directory is easy to influence; a privileged service must name its file).
 
 In cases 1 and 2 a missing file is an error. In cases 3 and 4 a missing file means "no file": every section takes its defaults and the first log lines say where the configuration came from. Before parsing, the file's owner and permissions are checked on the opened file, so the file checked is the file read (the 0.2 defence idea, D-020, and the 0.4 one, D-049): on Unix a file that is group- or world-writable, or owned by a user other than the service user or root, is refused with `ConfigInsecure`. There is no switch to accept such a file (D-048): the fix is `chmod 640` (or `600`) and, if needed, `chown`. The `.env` file is checked the same way before it is read, because it can name the configuration file. A file over 1 MiB is refused with `ConfigInvalid`. A parse error names the line and column and never quotes the text, which may hold a secret.
