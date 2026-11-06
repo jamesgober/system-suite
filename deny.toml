@@ -12,7 +12,13 @@ feature-depth = 1
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-ignore = []
+# `pin-utils` is unmaintained (RUSTSEC-2026-0441, no fixed version) and
+# reaches the tree only through `loom`, a development dependency of the
+# `--cfg loom` model tests; it is never part of a build of the crate.
+# Drop the ignore when a loom release stops depending on it.
+ignore = [
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils, through the dev-only loom model tests" },
+]
 
 [licenses]
 allow = [
