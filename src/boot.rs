@@ -243,7 +243,9 @@ impl Parts {
                 .checked_add(budget.saturating_sub(reserve))
                 .unwrap_or(began);
             #[cfg(feature = "config")]
-            if let Some(reloader) = self.reloader.clone() {
+            if let Some(reloader) = self.reloader.clone()
+                && !reloader.is_idle()
+            {
                 let outcome = run_with_deadline("reload", subsystems_deadline, move || {
                     reloader.wait_idle();
                 });

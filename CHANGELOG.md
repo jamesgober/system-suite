@@ -11,6 +11,16 @@
 
 ## [Unreleased]
 
+The second pre-1.0 pass.
+
+### Fixed
+
+- Every shutdown started a thread to wait for a reload, even with none
+  running (since 0.8.0's reload and shutdown ordering): about 0.12 ms of
+  a 0.45 ms stop on Windows. The thread is started only while a reload
+  is running; a reload that starts later sees the stop and refuses, as
+  before (D-093).
+
 ## [0.8.0] - 2026-11-06
 
 The alpha: the API reviewed against the planned consumers, JSON through

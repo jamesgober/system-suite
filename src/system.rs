@@ -882,6 +882,48 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "config", feature = "kernel"))]
+    #[test]
+    fn test_the_shutdown_waits_only_for_a_running_reload() {
+        // D-093: with no reload running the shutdown starts no thread to
+        // wait for one; with one running it still waits, within the deadline.
+        use std::{
+            sync::mpsc,
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let system = quiet("system-unit-reload-wait").start().unwrap();
+        let reloader = system.parts.reloader.clone().unwrap();
+        assert!(reloader.is_idle());
+
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let holder = {
+            let reloader = Arc::clone(&reloader);
+            thread::spawn(move || {
+                let _running = reloader.hold();
+                held_tx.send(()).unwrap();
+                let _released = release_rx.recv_timeout(Duration::from_secs(5));
+            })
+        };
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!reloader.is_idle());
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            let _sent = release_tx.send(());
+        });
+        let began = Instant::now();
+        assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+        assert!(
+            began.elapsed() >= Duration::from_millis(90),
+            "the shutdown did not wait for the running reload"
+        );
+        holder.join().unwrap();
+        releaser.join().unwrap();
+        assert!(reloader.is_idle());
+    }
+
     #[test]
     fn test_invalid_name_is_a_setup_error() {
         let error = quiet("not valid").start().err();

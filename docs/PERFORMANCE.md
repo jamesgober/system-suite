@@ -67,6 +67,20 @@ Where a boot and a stop spend their time, measured step by step (`System::boot_t
 - **Kept:** closing the log is most of a stop because it runs on its own stop thread, which is what keeps a blocked sink (a full pipe on standard error) from holding the process past its deadline (threat T6). The thread start is the cost, about 0.1 ms once per process; there is no `fsync`. Configuration, guard, and logging are the members' own file work (finding, checking, and reading the file; the umask and limits; creating the log file).
 - **Nothing to gain on the hot path:** the urgent-line check and an unchanged snapshot read are a single atomic load each (0.2 and 0.35 ns).
 
+The same profile on Windows (0.8.1, D-093), release profile, 300 boots after 20 to warm up, on a reference machine running other work (medians of three runs; compare within a run):
+
+| Boot step | Time | | Shutdown step | Time |
+|---|---|---|---|---|
+| 3 paths | 10 µs | | 1 draining | 3 µs |
+| 4 environment | 35 to 50 µs | | 2 subsystems (none) | 0.1 µs (was 126 µs) |
+| 5 configuration | 140 to 200 µs | | 3 workers and timers | 5 µs |
+| 9 directories | 30 to 48 µs | | 9 logging | 156 to 210 µs |
+| 10 logging | 125 to 190 µs | | every other step | under 1 µs |
+| every other step | under 2 µs each | | | |
+
+- **Fixed:** shutdown step 2 started a thread to wait for a reload on every stop, even with none running (the reload and shutdown ordering of D-089, added after the Linux profile above). Starting a thread costs 110 to 130 µs on Windows. It is started only while a reload runs: a stop went from about 450 µs to 250 to 330 µs.
+- **Kept:** the configuration step is file calls at 30 to 40 µs each on Windows (the metadata check, the open, the read; the parse of a small file is about 20 µs), which is the file system and its filter drivers. The metadata check before the open is what keeps a FIFO from blocking the boot on Unix. Logging, at boot and at stop, is mostly a thread start: the stop's is the T6 bound (D-088).
+
 ## Costs that stay
 
 | Operation | Cost | Where |

@@ -1,7 +1,7 @@
 //! The two-phase reload (D-019): read and validate, let every subsystem
 //! prepare, then publish and commit, or change nothing (threat T7).
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError, TryLockError};
 
 use super::{
     Config,
@@ -106,6 +106,24 @@ impl Reloader {
     /// that is being stopped.
     pub(crate) fn wait_idle(&self) {
         drop(self.running.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+
+    /// Whether no reload is running at this moment. Once a stop reason is
+    /// set, `true` stays true: a reload that takes the lock after this
+    /// sees the reason and refuses before it touches anything. The
+    /// shutdown asks first and starts its bounded wait (a thread) only
+    /// when a reload is running (D-093).
+    pub(crate) fn is_idle(&self) -> bool {
+        match self.running.try_lock() {
+            Ok(_) | Err(TryLockError::Poisoned(_)) => true,
+            Err(TryLockError::WouldBlock) => false,
+        }
+    }
+
+    /// Holds the reload lock as a running reload would, for tests.
+    #[cfg(test)]
+    pub(crate) fn hold(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn try_reload(&self) -> Result<u64, Error> {
