@@ -755,7 +755,11 @@ impl Coalesce {
             .spawn(move || {
                 loop {
                     while pending.swap(false, AcqRel) {
-                        work();
+                        // A run that panics (a parser, a subsystem's health)
+                        // must not leave `active` set: every later signal
+                        // would be dropped. The crash hook reports it.
+                        let _contained =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(&work));
                     }
                     active.store(false, std::sync::atomic::Ordering::Release);
                     // A signal between the last check and the store above
@@ -840,6 +844,32 @@ mod tests {
         // The signals folded into a handful of runs, and the last one ran.
         assert!((1..100).contains(&runs), "{runs} runs");
         assert!(!coalesce.pending.load(Ordering::Acquire));
+    }
+
+    #[cfg(feature = "signals")]
+    #[test]
+    fn test_a_panicking_signal_run_does_not_stop_later_ones() {
+        // D-094: one panicking reload or dump must not leave `active` set,
+        // or every later signal would be dropped.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coalesce = Coalesce::new("test-coalesce-panic");
+        coalesce.run(|| panic!("a reload bug"));
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while coalesce.active.load(Ordering::Acquire) && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!coalesce.active.load(Ordering::Acquire));
+        let ran = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&ran);
+        coalesce.run(move || {
+            let _n = counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ran.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
     }
 
     fn quiet(name: &str) -> Builder {

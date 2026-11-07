@@ -3,7 +3,10 @@
 //! A min-heap of due times (D-046): arming and firing are O(log n), a
 //! cancel is O(1) (the entry is skipped when it comes due), and with nothing
 //! due the thread waits with no timeout, so an idle system wakes for
-//! nothing (NFR-2). The thread starts with the first timer.
+//! nothing (NFR-2). The thread starts with the first timer. Cancelled
+//! entries are swept when the table has doubled since the last sweep, so
+//! cancelling and re-arming holds at most about twice the live timers
+//! (D-094).
 
 use std::{
     cmp::Reverse,
@@ -96,6 +99,8 @@ struct State {
     due: BinaryHeap<Reverse<(Instant, u64)>>,
     entries: HashMap<u64, Entry>,
     next_id: u64,
+    /// How many entries the table held after the last sweep.
+    swept_at: usize,
     stopping: bool,
     panicked: Option<&'static str>,
 }
@@ -159,6 +164,11 @@ impl Timers {
                 "stop scheduling work; the process is going away",
             ));
         }
+        let swept = if guard.entries.len() >= guard.swept_at.max(32).saturating_mul(2) {
+            sweep(&mut guard)
+        } else {
+            Vec::new()
+        };
         let id = guard.next_id;
         guard.next_id = guard.next_id.wrapping_add(1);
         let _previous = guard.entries.insert(
@@ -172,6 +182,8 @@ impl Timers {
         );
         guard.due.push(Reverse((due, id)));
         drop(guard);
+        // Dropped outside the lock: a callback's captures may arm a timer.
+        drop(swept);
         self.wake.notify_one();
         Ok(TimerHandle { name, state })
     }
@@ -336,6 +348,28 @@ fn run(runtime: &Inner) {
     }
 }
 
+/// Removes every cancelled or fired entry and its place in the heap, and
+/// returns them to be dropped once the lock is released. O(n), run when
+/// the table has doubled, so O(1) per timer armed.
+fn sweep(state: &mut State) -> Vec<Entry> {
+    let gone: Vec<u64> = state
+        .entries
+        .iter()
+        .filter(|(_, entry)| entry.state.load(Ordering::Acquire) != ACTIVE)
+        .map(|(id, _)| *id)
+        .collect();
+    let removed: Vec<Entry> = gone
+        .iter()
+        .filter_map(|id| state.entries.remove(id))
+        .collect();
+    let entries = &state.entries;
+    state
+        .due
+        .retain(|Reverse((_, id))| entries.contains_key(id));
+    state.swept_at = state.entries.len();
+    removed
+}
+
 /// Runs a callback and catches a panic. A periodic callback is handed back
 /// to be scheduled again.
 fn fire(callback: Option<Callback>) -> (Option<Callback>, bool) {
@@ -429,6 +463,19 @@ mod tests {
         assert!(handle.is_some_and(|h| h.cancel()));
         thread::sleep(Duration::from_millis(60));
         assert_eq!(fired.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_cancelled_timers_do_not_pile_up() {
+        // D-094: cancelling and re-arming (an idle timeout per request)
+        // holds about twice the live timers, not every one ever armed.
+        let rt = runtime();
+        for _ in 0..10_000 {
+            let handle = rt.after("idle", Duration::from_secs(3600), || {}).ok();
+            assert!(handle.is_some_and(|h| h.cancel()));
+        }
+        let held = rt.inner.timers.lock().entries.len();
+        assert!(held <= 64, "{held} entries held for no live timer");
     }
 
     #[test]

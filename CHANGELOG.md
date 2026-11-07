@@ -20,6 +20,25 @@ The second pre-1.0 pass.
   a 0.45 ms stop on Windows. The thread is started only while a reload
   is running; a reload that starts later sees the stop and refuses, as
   before (D-093).
+- Secrets inside a list's tables were not checked: a plain password under
+  `[[pools]]` was accepted, and a reference there was read back as its
+  literal text. Lists are walked to any depth now (D-094).
+- A key spelled twice, nested and as one key with a dot
+  (`{"db": {"password": ...}, "db.password": ...}`), is refused; a dotted
+  top-level key for a suite section (`kernel.notify = false`), which was
+  silently ignored, is refused with the section to use.
+- A configuration parser that panics refuses the file instead of ending
+  the boot or the reload thread; a subsystem whose `health` panics is
+  reported `Unhealthy`, at boot too; one panicking reload or dump no longer
+  stops every later reload and dump signal.
+- A `file:` secret, the audit chain, and its anchor must be regular files,
+  checked before opening (a FIFO would block the boot); the anchor is read
+  only to 4 KiB.
+- Audit fields are cut to 4 KiB at a character boundary. A record that was
+  appended but could not be synced says so, so a caller does not record it
+  twice.
+- Cancelled timers kept their entry and closure until their due time (up
+  to 30 days); they are swept when the table doubles.
 
 ### Changed
 

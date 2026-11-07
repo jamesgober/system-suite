@@ -23,7 +23,7 @@ use std::{
 
 use system_suite::{
     Builder, ErrorKind, Member, Step, System,
-    kernel::{Component, Level, Status},
+    kernel::{Component, Health, Level, Status},
     lifecycle::{Commit, Deadline, Failure, Link, Position, Subsystem},
     runtime::{Backoff, Restart, Worker, WorkerState},
 };
@@ -338,6 +338,38 @@ fn test_t7_reload_publishes_only_a_valid_accepted_configuration() {
         system.reload().err().map(|e| e.kind()),
         Some(ErrorKind::Stopping)
     );
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+struct PanickyHealth;
+
+impl Subsystem for PanickyHealth {
+    fn name(&self) -> &str {
+        "panicky"
+    }
+    fn start(&mut self, _link: &Link) -> Result<(), Failure> {
+        Ok(())
+    }
+    fn stop(&mut self, _deadline: Deadline) -> Result<(), Failure> {
+        Ok(())
+    }
+    fn health(&self) -> Health {
+        panic!("health check bug")
+    }
+}
+
+#[test]
+fn test_a_panicking_health_check_reports_unhealthy() {
+    // D-094: a dump or a health endpoint must not unwind because one
+    // subsystem's `health` panics.
+    let root = Root::new("panicky-health");
+    let system = quiet("kernel-panicky-health", &root)
+        .register(PanickyHealth)
+        .start()
+        .unwrap();
+    assert_eq!(system.status(), Status::Unhealthy);
+    let report = system.health();
+    assert_eq!(report.status(), Status::Unhealthy);
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
 
@@ -751,6 +783,39 @@ fn test_a_separator_in_a_field_is_still_recorded() {
     // The next boot verifies the chain, record included.
     let system = quiet("kernel-audit-sep", &root).start().unwrap();
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_a_long_audit_field_is_cut() {
+    use system_suite::audit::Outcome;
+
+    // D-094: request text cannot make one record megabytes long.
+    let root = Root::new("audit-long");
+    let system = quiet("kernel-audit-long", &root).start().unwrap();
+    let long = "é".repeat(100_000);
+    let _id = system
+        .audit()
+        .record(&long, "user.delete", "user:9", Outcome::Failure)
+        .unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let size = std::fs::metadata(audit_file(&root, "kernel-audit-long"))
+        .unwrap()
+        .len();
+    assert!(size < 16 * 1024, "the chain is {size} bytes");
+    // The cut is on a character boundary: the chain still verifies.
+    let system = quiet("kernel-audit-long", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "audit")]
+#[test]
+fn test_an_audit_chain_that_is_not_a_file_is_refused() {
+    let root = Root::new("audit-dir");
+    std::fs::create_dir_all(audit_file(&root, "kernel-audit-dir")).unwrap();
+    let error = quiet("kernel-audit-dir", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::Audit);
+    assert!(error.to_string().contains("not a regular file"), "{error}");
 }
 
 #[cfg(feature = "audit")]

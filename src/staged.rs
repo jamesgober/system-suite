@@ -152,7 +152,7 @@ impl Boot {
         if let Some(error) = failure {
             return Err(error.in_subsystem(&name).at(Step::Subsystems));
         }
-        let health = subsystem.health();
+        let health = crate::kernel::checked_health(subsystem.as_ref());
         kernel.add_slot(Arc::new(Slot {
             name: name.clone(),
             subsystem: Mutex::new(subsystem),
