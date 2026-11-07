@@ -11,7 +11,11 @@
 
 ## [Unreleased]
 
-The second pre-1.0 pass.
+## [0.8.1] - 2026-11-07
+
+The second pre-1.0 pass: an independent security review of the whole
+suite, every finding fixed or recorded, config-lib 1.3's strict parsing,
+and boot and stop profiled step by step on Windows.
 
 ### Fixed
 
@@ -42,6 +46,9 @@ The second pre-1.0 pass.
 
 ### Changed
 
+- config-lib 1.3: TOML and NOML files are parsed strictly (`include` and
+  `env()` refused), `conf` handles any text in linear time, and bracket
+  lists of unquoted items (`[80, 443]`) parse.
 - sys-lib 0.5 (additive over 0.4; no new dependencies in the suite's
   tree), so an application on sys-lib 0.5 builds one copy.
 
@@ -458,7 +465,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/jamesgober/system-suite/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/jamesgober/system-suite/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jamesgober/system-suite/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jamesgober/system-suite/compare/v0.6.0...v0.7.0

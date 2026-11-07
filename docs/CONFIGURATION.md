@@ -23,7 +23,7 @@ Every key the suite reads, with its type, default, and what it does. Every secti
 | | |
 |---|---|
 | Where | the first that applies: `Builder::config_file` or `config_str`; the file named by `<NAME>_CONFIG` (process environment, then the `.env` file); `<config dir>/<name>.conf`; `./<name>.conf` when the process is not elevated |
-| Format | config-lib's `conf`: `[section]` headers, `key = value`, `#` comments, quoted strings, `[a, b]` lists. `.toml` with `config-toml`, `.noml` with `config-noml`, `.json` with `config-json` (the format follows the extension). JSON is read strictly: a repeated key is an error, not a choice of the last one; the top level is an object of sections |
+| Format | config-lib's `conf`: `[section]` headers, `key = value`, `#` comments, quoted strings, `[a, b]` lists. `.toml` with `config-toml`, `.noml` with `config-noml`, `.json` with `config-json` (the format follows the extension). JSON is read strictly: a repeated key is an error, not a choice of the last one; the top level is an object of sections. TOML and NOML files are read strictly too: NOML's `include` and its functions (`env()` and the rest) are refused, so a file cannot pull in another file or the environment; a secret comes from `env:`, `file:`, or `vault:` instead |
 | Size | at most 1 MiB |
 | Owner and mode (Unix) | owned by the service's user or root, not group- or world-writable; checked on the opened file. There is no switch to accept another file |
 | Unknown keys | refused in the suite's sections below (a misspelt key cannot silently keep its default); not checked in the application's sections |

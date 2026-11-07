@@ -212,10 +212,12 @@ pub(crate) fn parse(text: &str, source: Option<&Path>, version: u64) -> Result<C
             |p| p.display().to_string(),
         )
     };
-    // A parser that panics on some input is a refused file, not a crashed
-    // boot or a dead reload thread.
+    // Strict: NOML's `include` and its functions (`env()`) are refused, so
+    // every byte the configuration holds comes from this checked file
+    // (D-094). A parser that panics on some input is a refused file, not
+    // a crashed boot or a dead reload thread.
     let Ok(parsed) =
-        std::panic::catch_unwind(|| config_lib::Config::from_string(text, Some(format)))
+        std::panic::catch_unwind(|| config_lib::Config::from_string_strict(text, Some(format)))
     else {
         return Err(Error::new(
             ErrorKind::ConfigInvalid,
@@ -490,6 +492,63 @@ mod tests {
         let error = parse("[http\nport = \"hunter2", Some(Path::new("site.toml")), 1).err();
         let text = error.as_ref().map(ToString::to_string).unwrap_or_default();
         assert!(!text.contains("hunter2"), "{text}");
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn test_toml_refuses_include_and_env() {
+        // D-094: an included file would skip every check this file passed.
+        for text in [
+            "[app]\nx = include \"other.toml\"\n",
+            "[app]\nx = env(\"PATH\")\n",
+        ] {
+            let error = parse(text, Some(Path::new("site.toml")), 1).err();
+            let shown = error.as_ref().map(ToString::to_string).unwrap_or_default();
+            assert!(
+                !shown.contains("PATH") && !shown.contains("other"),
+                "{shown}"
+            );
+            assert_eq!(
+                error.map(|e| e.kind()),
+                Some(ErrorKind::ConfigInvalid),
+                "{text}"
+            );
+        }
+    }
+
+    #[cfg(feature = "config-noml")]
+    #[test]
+    fn test_noml_refuses_include_and_env() {
+        for text in [
+            "[app]\nx = include \"other.noml\"\n",
+            "[app]\nx = env(\"PATH\")\n",
+        ] {
+            let error = parse(text, Some(Path::new("site.noml")), 1).err();
+            assert_eq!(
+                error.map(|e| e.kind()),
+                Some(ErrorKind::ConfigInvalid),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bracket_lists_of_unquoted_items_parse() {
+        let config = parse("[http]
+ports = [80, 443]
+", None, 1).unwrap_or_else(|e| panic!("{e}"));
+        let ports: Vec<u16> = config.require("http.ports").unwrap_or_default();
+        assert_eq!(ports, [80, 443]);
+    }
+
+    #[test]
+    fn test_non_ascii_text_parses() {
+        let config = parse("# café settings\n[app]\nname = \"café\"\n", None, 1)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            config.get::<String>("app.name").ok().flatten().as_deref(),
+            Some("café")
+        );
     }
 
     #[cfg(feature = "config-noml")]
