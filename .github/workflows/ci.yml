@@ -81,7 +81,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for f in kernel sys paths env config log metrics signals time ids                    audit registry globals rand secrets                    log-bridge log-tracing metrics-tracing config-toml config-noml audit-blake3; do
+          for f in kernel sys paths env config log metrics signals time ids                    audit registry globals rand secrets                    log-bridge log-tracing metrics-tracing config-toml config-noml config-json metrics-json metrics-otlp audit-blake3; do
             echo "::group::$f"
             cargo clippy --all-targets --no-default-features --features "$f" -- -D warnings
             cargo test --no-default-features --features "$f"

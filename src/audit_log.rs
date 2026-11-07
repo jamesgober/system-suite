@@ -2,6 +2,7 @@
 //! actions, an audit-trail chain over an owner-only file (boot step 13).
 
 use std::{
+    borrow::Cow,
     fmt,
     fs::File,
     io::BufWriter,
@@ -174,6 +175,11 @@ impl AuditLog {
     /// with `outcome`. Returns the record's id. With `[audit] sync =
     /// "every"` the record is on disk when this returns.
     ///
+    /// The byte `0x1f` separates the hashed fields, so audit-trail refuses
+    /// it inside one; here it is recorded as U+FFFD instead, so a caller
+    /// that passes text from a request (a user name, a path) cannot keep
+    /// its record out of the chain (D-090).
+    ///
     /// # Errors
     ///
     /// [`ErrorKind::Audit`] when the record cannot be written or synced;
@@ -189,9 +195,9 @@ impl AuditLog {
         let mut chain = lock(&open.chain);
         let id = chain
             .append(
-                Actor::new(actor),
-                Action::new(action),
-                Target::new(target),
+                Actor::new(&no_separator(actor)),
+                Action::new(&no_separator(action)),
+                Target::new(&no_separator(target)),
                 outcome,
             )
             .map_err(|e| write_error(&open.path, &e.to_string()))?;
@@ -397,6 +403,20 @@ pub(crate) struct OpenSummary {
     pub(crate) records: u64,
     pub(crate) created: bool,
     pub(crate) cut: Option<(u64, PathBuf)>,
+}
+
+/// The field separator of audit-trail's hashed bytes, which it refuses
+/// inside a field.
+const SEPARATOR: char = '\u{1f}';
+
+/// `field` with every separator replaced by U+FFFD; borrowed (no
+/// allocation) when there is none, which is every field the suite writes.
+fn no_separator(field: &str) -> Cow<'_, str> {
+    if field.contains(SEPARATOR) {
+        Cow::Owned(field.replace(SEPARATOR, "\u{fffd}"))
+    } else {
+        Cow::Borrowed(field)
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

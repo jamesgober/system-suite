@@ -13,25 +13,28 @@ use crate::{Error, ErrorKind};
 pub(crate) const MAX_FILE_BYTES: u64 = 1 << 20;
 
 /// The configuration formats compiled in, by file extension. `conf` is
-/// always there; `toml` and `noml` come with `config-toml` and
-/// `config-noml`.
+/// always there; `toml`, `noml`, and `json` come with `config-toml`,
+/// `config-noml`, and `config-json`.
 const FORMATS: &[&str] = &[
     "conf",
     #[cfg(feature = "config-toml")]
     "toml",
     #[cfg(feature = "config-noml")]
     "noml",
+    #[cfg(feature = "config-json")]
+    "json",
 ];
 
-/// The format of a configuration file, from its extension: `.toml` and
-/// `.noml` when their feature is compiled in, `conf` for anything else.
+/// The format of a configuration file, from its extension: `.toml`,
+/// `.noml`, and `.json` when their feature is compiled in, `conf` for
+/// anything else.
 pub(crate) fn format_of(path: &Path) -> Result<&'static str, Error> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
     match extension.as_deref() {
-        Some(wanted @ ("toml" | "noml")) => FORMATS
+        Some(wanted @ ("toml" | "noml" | "json")) => FORMATS
             .iter()
             .find(|format| **format == wanted)
             .copied()
@@ -222,6 +225,19 @@ pub(crate) fn parse(text: &str, source: Option<&Path>, version: u64) -> Result<C
             "fix the line named in the message; values with spaces need quotes",
         )
     })?;
+    // A JSON file may hold any value at its top level; only an object of
+    // sections is a configuration (the other formats always give one).
+    if !matches!(document.as_value(), config_lib::Value::Table(_)) {
+        let file = source.map_or_else(
+            || "the configuration".to_owned(),
+            |p| p.display().to_string(),
+        );
+        return Err(Error::new(
+            ErrorKind::ConfigInvalid,
+            format!("{file} is not a table of sections at its top level"),
+            "write the file as an object whose keys are the sections",
+        ));
+    }
     Ok(Config::new(document, source, version))
 }
 
@@ -402,6 +418,10 @@ mod tests {
             format_of(Path::new("site.NOML")).is_ok(),
             cfg!(feature = "config-noml")
         );
+        assert_eq!(
+            format_of(Path::new("site.json")).is_ok(),
+            cfg!(feature = "config-json")
+        );
     }
 
     #[cfg(feature = "config-toml")]
@@ -427,6 +447,65 @@ mod tests {
         let config = parse("[http]\nport = 8080\n", Some(Path::new("site.noml")), 1)
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(config.get::<u16>("http.port").ok().flatten(), Some(8080));
+    }
+
+    #[cfg(feature = "config-json")]
+    #[test]
+    fn test_json_files_parse_into_the_same_view() {
+        let config = parse(
+            "{\"http\": {\"port\": 8080, \"hosts\": [\"a\", \"b\"]}, \"log\": {\"level\": \"debug\"}}",
+            Some(Path::new("site.json")),
+            1,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(config.get::<u16>("http.port").ok().flatten(), Some(8080));
+        let hosts: Vec<String> = config.require("http.hosts").unwrap_or_default();
+        assert_eq!(hosts, ["a", "b"]);
+        assert_eq!(
+            config.get::<String>("log.level").ok().flatten().as_deref(),
+            Some("debug")
+        );
+    }
+
+    #[cfg(feature = "config-json")]
+    #[test]
+    fn test_json_errors_give_position_not_text() {
+        let error = parse(
+            "{\"db\": {\"password\": \"hunter2\",}}",
+            Some(Path::new("site.json")),
+            1,
+        )
+        .err();
+        let text = error.as_ref().map(ToString::to_string).unwrap_or_default();
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(text.contains("line 1"), "{text}");
+        assert_eq!(error.map(|e| e.kind()), Some(ErrorKind::ConfigInvalid));
+    }
+
+    #[cfg(feature = "config-json")]
+    #[test]
+    fn test_json_refuses_a_top_level_that_is_not_an_object() {
+        for text in ["[1, 2]", "8080", "\"site\"", "null"] {
+            let error = parse(text, Some(Path::new("site.json")), 1).err();
+            assert_eq!(
+                error.map(|e| e.kind()),
+                Some(ErrorKind::ConfigInvalid),
+                "{text}"
+            );
+        }
+    }
+
+    #[cfg(feature = "config-json")]
+    #[test]
+    fn test_json_refuses_a_duplicate_key() {
+        // Two values for one key: which one wins is a guess, so refuse.
+        let error = parse(
+            "{\"http\": {\"port\": 80, \"port\": 8080}}",
+            Some(Path::new("site.json")),
+            1,
+        )
+        .err();
+        assert_eq!(error.map(|e| e.kind()), Some(ErrorKind::ConfigInvalid));
     }
 
     #[test]
