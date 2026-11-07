@@ -21,6 +21,11 @@ The second pre-1.0 pass.
   is running; a reload that starts later sees the stop and refuses, as
   before (D-093).
 
+### Changed
+
+- sys-lib 0.5 (additive over 0.4; no new dependencies in the suite's
+  tree), so an application on sys-lib 0.5 builds one copy.
+
 ## [0.8.0] - 2026-11-06
 
 The alpha: the API reviewed against the planned consumers, JSON through

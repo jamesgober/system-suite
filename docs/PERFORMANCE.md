@@ -78,7 +78,7 @@ The same profile on Windows (0.8.1, D-093), release profile, 300 boots after 20 
 | 10 logging | 125 to 190 µs | | every other step | under 1 µs |
 | every other step | under 2 µs each | | | |
 
-- **Fixed:** shutdown step 2 started a thread to wait for a reload on every stop, even with none running (the reload and shutdown ordering of D-089, added after the Linux profile above). Starting a thread costs 110 to 130 µs on Windows. It is started only while a reload runs: a stop went from about 450 µs to 250 to 330 µs.
+- **Fixed:** shutdown step 2 started a thread to wait for a reload on every stop, even with none running (the reload and shutdown ordering of D-089, added after the Linux profile above). Starting a thread costs 110 to 130 µs on Windows. It is started only while a reload runs: a stop went from about 450 µs to 250 to 330 µs. On Linux a thread start is cheap next to the noise of a loaded machine: three alternating runs of the benchmark could not tell the two apart.
 - **Kept:** the configuration step is file calls at 30 to 40 µs each on Windows (the metadata check, the open, the read; the parse of a small file is about 20 µs), which is the file system and its filter drivers. The metadata check before the open is what keeps a FIFO from blocking the boot on Unix. Logging, at boot and at stop, is mostly a thread start: the stop's is the T6 bound (D-088).
 
 ## Costs that stay

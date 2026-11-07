@@ -127,7 +127,7 @@ Every member is behind its own feature, and every feature is additive: turning o
 | Feature | Default | Member (crate) | Brings | Third-party runtime dependencies |
 |---|---|---|---|---|
 | `kernel` | yes | this crate: modules `kernel`, `lifecycle`, `runtime` | signals to decisions, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
-| `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
+| `sys` | yes | sys-lib 0.5 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1.1 | application and OS directories, owner-only where the suite writes | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
 | `config` | yes | config-lib 1.2, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |

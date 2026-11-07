@@ -153,7 +153,7 @@ audit-blake3 = ["audit", "audit-trail/blake3"]
 # Build info, instance info, process guard, live memory readings (0.4).
 # First-party; brings path-lib, clock-lib, and id-forge (all first-party, no
 # third-party crates).
-sys-lib = { version = "0.4", optional = true }
+sys-lib = { version = "0.5", optional = true }
 
 # Application directories and hardened joins; 1.1 for owner-only
 # directories on every OS (`ensure_private`). First-party, no dependencies.
