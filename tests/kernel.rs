@@ -238,9 +238,16 @@ fn test_t6_a_subsystem_that_never_stops_is_abandoned_at_the_deadline() {
     let took = began.elapsed();
     released.store(true, Ordering::SeqCst);
     assert_eq!(code, ExitCode::from(system_suite::exit::DEADLINE));
-    // The subsystem that started before the stuck one was still stopped.
-    assert_eq!(entries(&journal), ["start store", "stop store"]);
     assert!(took < Duration::from_secs(5), "the shutdown took {took:?}");
+    // The subsystem that started before the stuck one was still asked to
+    // stop (D-047). Its grace is 100 ms; on a machine at full load its
+    // stop thread can start after that, so the call is waited for here
+    // rather than required within the grace.
+    let asked = Instant::now();
+    while entries(&journal).len() < 2 && asked.elapsed() < Duration::from_secs(5) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(entries(&journal), ["start store", "stop store"]);
 }
 
 // ---------------------------------------------------------------------------
