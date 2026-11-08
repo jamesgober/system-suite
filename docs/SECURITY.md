@@ -62,6 +62,7 @@ What the suite defends against, how, what each defence costs, and the test that 
 | a `file:` secret, the audit chain, and its anchor must be regular files, checked before opening, and the anchor is read only to 4 KiB | one `stat` each | 0.8.1 (D-094) |
 | each audit field is cut to 4 KiB at a character boundary, so request text cannot make one record megabytes long; a record appended but not synced is reported as such, so it is not recorded twice | none | 0.8.1 (D-094) |
 | cancelled timers are swept when the table has doubled, so cancelling and re-arming holds about twice the live timers | O(1) per timer armed, amortized | 0.8.1 (D-094) |
+| a slow audit disk cannot take the subsystems' time at shutdown: the stop record is written through to the operating system at step 1 and synced at step 5, and step 1 is bounded by the subsystems' share; a power loss before step 5 loses that one record | one sync fewer per stop | 0.8.1 (D-095) |
 
 ## Known limits
 

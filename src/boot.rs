@@ -184,10 +184,15 @@ impl Parts {
     /// abandoned at the deadline.
     pub(crate) fn teardown(&mut self, code: u8, cause: &str) -> u8 {
         let (budget, reserve) = self.deadlines();
-        #[cfg(not(feature = "kernel"))]
-        let _no_subsystems = reserve;
         let began = Instant::now();
         let deadline = began.checked_add(budget).unwrap_or(began);
+        // The part of the deadline before the member reserve: the
+        // subsystems' and workers' share.
+        let part = began
+            .checked_add(budget.saturating_sub(reserve))
+            .unwrap_or(began);
+        #[cfg(not(any(feature = "kernel", feature = "audit")))]
+        let _no_subsystems = part;
         let mut code = code;
 
         // 1. Draining: every worker and subsystem learns of the stop at once.
@@ -216,15 +221,18 @@ impl Parts {
             self.notify("STATUS=stopping");
         }
         self.log.info("stopping", &[("cause", Val::Str(cause))]);
-        // The stop's own record syncs to disk, so it is bounded like every
-        // other step: a hung disk cannot hold the shutdown here (T6).
+        // The stop's own record is written through to the operating system
+        // and synced in step 5 with every other record, never here: a slow
+        // disk would otherwise spend the subsystems' share (D-095). The
+        // write is still bounded, by that share, so a hung disk cannot hold
+        // the shutdown here either (T6).
         #[cfg(feature = "audit")]
         if let Some(audit) = self.audit.clone().filter(crate::AuditLog::is_enabled) {
             let log = self.log.clone();
             let cause = crate::kernel::cap_reason(std::borrow::Cow::Owned(cause.to_owned()));
-            let outcome = run_with_deadline("audit-stop", deadline, move || {
+            let outcome = run_with_deadline("audit-stop", part, move || {
                 if let Err(error) =
-                    audit.record("kernel", "stop", &cause, audit_trail::Outcome::Success)
+                    audit.record_unsynced("kernel", "stop", &cause, audit_trail::Outcome::Success)
                 {
                     log.error(
                         "the stop could not be audited",
@@ -239,19 +247,16 @@ impl Parts {
         //    committing to them: the stop reason above refuses new ones.
         #[cfg(feature = "kernel")]
         {
-            let subsystems_deadline = began
-                .checked_add(budget.saturating_sub(reserve))
-                .unwrap_or(began);
             #[cfg(feature = "config")]
             if let Some(reloader) = self.reloader.clone()
                 && !reloader.is_idle()
             {
-                let outcome = run_with_deadline("reload", subsystems_deadline, move || {
+                let outcome = run_with_deadline("reload", part, move || {
                     reloader.wait_idle();
                 });
                 code = self.account("reload", outcome, code);
             }
-            code = self.stop_subsystems(subsystems_deadline, deadline, code);
+            code = self.stop_subsystems(part, deadline, code);
         }
 
         // 3. Stopping: workers and timers.
@@ -259,10 +264,7 @@ impl Parts {
         {
             let _raised = self.kernel.urgent().raise(Level::Stopping, "stopping");
             self.kernel.set_phase(Phase::Stopping);
-            let workers_deadline = began
-                .checked_add(budget.saturating_sub(reserve))
-                .unwrap_or(began)
-                .max(Instant::now());
+            let workers_deadline = part.max(Instant::now());
             for late in self.kernel.runtime().stop(workers_deadline) {
                 self.log.error(
                     "a runtime thread did not stop by the deadline and was abandoned",

@@ -209,6 +209,32 @@ impl AuditLog {
         target: &str,
         outcome: Outcome,
     ) -> Result<RecordId, Error> {
+        self.append(actor, action, target, outcome, false)
+    }
+
+    /// The shutdown's own stop record: written through to the operating
+    /// system, so it survives the process dying, but not synced whatever
+    /// the sync policy. Shutdown step 5 syncs it with every other record
+    /// before the members close, so a slow disk cannot spend the
+    /// subsystems' share of the deadline here (D-095).
+    pub(crate) fn record_unsynced(
+        &self,
+        actor: &str,
+        action: &str,
+        target: &str,
+        outcome: Outcome,
+    ) -> Result<RecordId, Error> {
+        self.append(actor, action, target, outcome, true)
+    }
+
+    fn append(
+        &self,
+        actor: &str,
+        action: &str,
+        target: &str,
+        outcome: Outcome,
+        defer_sync: bool,
+    ) -> Result<RecordId, Error> {
         let open = self.chain_file()?;
         let mut chain = lock(&open.chain);
         let id = chain
@@ -219,7 +245,11 @@ impl AuditLog {
                 outcome,
             )
             .map_err(|e| write_error(&open.path, &e.to_string()))?;
-        if open.sync_every {
+        if defer_sync {
+            chain
+                .flush()
+                .map_err(|e| write_error(&open.path, &e.to_string()))?;
+        } else if open.sync_every {
             chain
                 .sink_mut()
                 .sync()

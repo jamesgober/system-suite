@@ -534,9 +534,14 @@ mod tests {
 
     #[test]
     fn test_bracket_lists_of_unquoted_items_parse() {
-        let config = parse("[http]
+        let config = parse(
+            "[http]
 ports = [80, 443]
-", None, 1).unwrap_or_else(|e| panic!("{e}"));
+",
+            None,
+            1,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         let ports: Vec<u16> = config.require("http.ports").unwrap_or_default();
         assert_eq!(ports, [80, 443]);
     }

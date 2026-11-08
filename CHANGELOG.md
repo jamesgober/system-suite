@@ -43,6 +43,13 @@ and boot and stop profiled step by step on Windows.
   twice.
 - Cancelled timers kept their entry and closure until their due time (up
   to 30 days); they are swept when the table doubles.
+- With audit on and `[audit] sync = "every"`, the stop's own record was
+  synced to disk at shutdown step 1, against the whole deadline: on a slow
+  disk (one fsync took 160 to 670 ms in a loaded WSL) it spent the
+  subsystems' share, and they were abandoned without time to stop. The
+  record is written through to the operating system there and synced at
+  step 5 with every other record, and step 1 is bounded by the
+  subsystems' share (D-095).
 
 ### Changed
 

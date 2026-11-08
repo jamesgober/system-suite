@@ -108,7 +108,7 @@ A stop is requested by a stop signal, `System::request_stop`, a critical worker 
 
 | # | Step | What happens | Since |
 |---|---|---|---|
-| 1 | `Draining` | the phase becomes `Draining`; the urgent line is raised to `Draining` (every worker sees it at its next checkpoint, every subsystem's mailbox is poked); `STOPPING=1` to systemd | 0.3 |
+| 1 | `Draining` | the phase becomes `Draining`; the urgent line is raised to `Draining` (every worker sees it at its next checkpoint, every subsystem's mailbox is poked); `STOPPING=1` to systemd; with audit on, the stop is recorded and written through to the operating system (synced at step 5, bounded by the subsystems' share of the deadline) | 0.3 |
 | 2 | subsystems | stopped one at a time in the reverse of their start order, each on a stop thread and given the remaining shutdown deadline minus the member reserve; one log line per subsystem with its stop time, or that it was abandoned | 0.4 |
 | 3 | `Stopping` | the urgent line is raised to `Stopping` once the subsystems have stopped (or at the deadline, when one was abandoned); workers are asked to stop and joined; the timer thread stops | 0.4 |
 | 4 | registry | event handlers are cleared and waited for, so none runs while members close | 0.5 |
