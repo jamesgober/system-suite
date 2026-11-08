@@ -82,6 +82,23 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
             }
         }
     }
+    // A dotted top-level key (`kernel.notify = false` in a `conf` file) is
+    // one key with a dot in it, which the suite's sections never read:
+    // refused, so the setting is not silently ignored (D-094).
+    if let config_lib::Value::Table(root) = config.backend().as_value()
+        && let Some((section, key)) = root.keys().find_map(|key| {
+            let (section, rest) = key.split_once('.')?;
+            KNOWN
+                .iter()
+                .any(|(known, _)| *known == section)
+                .then_some((section, rest))
+        })
+    {
+        return Err(invalid(
+            format!("`{section}.{key}` is not read: the suite's settings live in sections"),
+            format!("write it as `{key} = ...` under a [{section}] line"),
+        ));
+    }
     let mut s = Sections::default();
 
     s.guard.lock = config.get("guard.lock")?;
@@ -275,6 +292,23 @@ mod tests {
 
     fn sections(text: &str) -> Result<Sections, Error> {
         read(&Config::from_text(text)?)
+    }
+
+    #[test]
+    fn test_a_dotted_key_for_a_suite_section_is_refused() {
+        // D-094: `kernel.notify = false` at the top level is one key with a
+        // dot in it, never read as `[kernel] notify`: refused, not ignored.
+        for text in ["kernel.notify = false\n", "log.levle = \"debug\"\n"] {
+            let config = Config::from_text(text).unwrap_or_else(|e| panic!("{e}"));
+            let error = read(&config).err();
+            assert_eq!(
+                error.map(|e| e.kind()),
+                Some(ErrorKind::ConfigInvalid),
+                "{text}"
+            );
+        }
+        let config = Config::from_text("app.limit = 1\n").unwrap_or_else(|e| panic!("{e}"));
+        assert!(read(&config).is_ok());
     }
 
     #[test]

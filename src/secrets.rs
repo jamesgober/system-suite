@@ -163,7 +163,10 @@ pub(crate) fn resolve(config: &Config, sources: &Sources<'_>) -> Result<Resolved
     collect(config.backend().as_value(), &mut Vec::new(), &mut found);
     let mut values = Vec::with_capacity(found.len());
     for (path, text) in found {
-        if let Some(list) = path.strip_suffix("[]") {
+        // A reference anywhere inside a list would have no name of its own.
+        if let Some((list, _)) = path.split_once("[]")
+            && reference(&text).is_some()
+        {
             return Err(secret_error(
                 list,
                 "holds a secret reference inside a list",
@@ -343,14 +346,22 @@ fn reference(text: &str) -> Option<(&'static str, &str)> {
 /// Whether a key's last segment marks it as a secret: the word itself, or
 /// a name ending in `_<word>` (`db_password`).
 pub(crate) fn marks_secret(path: &str) -> bool {
-    let last = path.rsplit('.').next().unwrap_or(path).to_ascii_lowercase();
+    let last = path
+        .rsplit('.')
+        .next()
+        .unwrap_or(path)
+        .trim_end_matches("[]")
+        .to_ascii_lowercase();
     SECRET_WORDS
         .iter()
         .any(|word| last == *word || last.ends_with(&format!("_{word}")))
 }
 
-/// Every string value with its dotted path. Arrays are walked too; their
-/// elements share the array's path.
+/// Every string value with its dotted path. Lists are walked to any depth:
+/// an element's path is the list's with `[]` added (`pools[].password`),
+/// so a reference anywhere in a list is refused in `resolve`, and a plain
+/// value under a secret-marked key inside one is checked like any other
+/// (D-094).
 fn collect(value: &config_lib::Value, path: &mut Vec<String>, out: &mut Vec<(String, String)>) {
     match value {
         config_lib::Value::String(text) => out.push((path.join("."), text.clone())),
@@ -362,15 +373,13 @@ fn collect(value: &config_lib::Value, path: &mut Vec<String>, out: &mut Vec<(Str
             }
         }
         config_lib::Value::Array(items) => {
-            // Elements share the list's key; a reference inside a list is
-            // refused in `resolve` (it would have no name of its own).
+            let list = path.pop().unwrap_or_default();
+            path.push(format!("{list}[]"));
             for item in items {
-                if let config_lib::Value::String(text) = item
-                    && reference(text).is_some()
-                {
-                    out.push((format!("{}[]", path.join(".")), text.clone()));
-                }
+                collect(item, path, out);
             }
+            let _element = path.pop();
+            path.push(list);
         }
         _ => {}
     }
@@ -404,6 +413,15 @@ fn from_file(path: &str, file: &Path) -> Result<RawKey, Error> {
             path,
             "names a relative file path",
             "write file:/absolute/path",
+        ));
+    }
+    // A regular file only, checked before opening: opening a FIFO would
+    // block the boot (or the reload).
+    if fs::metadata(file).is_ok_and(|m| !m.is_file()) {
+        return Err(secret_error(
+            path,
+            &format!("names {}, which is not a regular file", file.display()),
+            "point it at a regular file that holds the secret",
         ));
     }
     let opened = fs::File::open(file).map_err(|e| {
@@ -526,6 +544,46 @@ mod tests {
         let plain =
             Config::from_text("[db]\nhosts = [\"a\", \"b\"]\n").unwrap_or_else(|e| panic!("{e}"));
         assert!(resolve(&plain, &sources).is_ok());
+    }
+
+    #[cfg(feature = "config-json")]
+    #[test]
+    fn test_secrets_inside_lists_of_tables_are_checked() {
+        // D-094: a list's tables are walked like any other table.
+        let vault = key_vault::KeyVaultBuilder::new().build();
+        let strict = Sources {
+            vault: &vault,
+            #[cfg(feature = "env")]
+            env: None,
+            allow_plain: false,
+        };
+        let parse = |text: &str| {
+            crate::config::load::parse(text, Some(Path::new("site.json")), 1)
+                .unwrap_or_else(|e| panic!("{e}"))
+        };
+        let plain = parse("{\"app\": {\"pools\": [{\"host\": \"a\", \"password\": \"hunter2\"}]}}");
+        let error = resolve(&plain, &strict).err();
+        assert_eq!(
+            error.as_ref().map(Error::kind),
+            Some(ErrorKind::PlainSecret)
+        );
+        assert!(!error.is_some_and(|e| e.to_string().contains("hunter2")));
+
+        let nested = parse("{\"app\": {\"pools\": [[{\"token\": \"env:X\"}]]}}");
+        let error = resolve(&nested, &strict).err();
+        assert_eq!(error.as_ref().map(Error::kind), Some(ErrorKind::Secret));
+        assert!(error.is_some_and(|e| e.to_string().contains("app.pools")));
+
+        let fine = parse("{\"app\": {\"pools\": [{\"host\": \"a\", \"port\": 1}]}}");
+        assert!(resolve(&fine, &strict).is_ok());
+    }
+
+    #[test]
+    fn test_a_secret_file_that_is_not_a_regular_file_is_refused() {
+        let dir = std::env::temp_dir();
+        let error = from_file("db.password", &dir).err();
+        assert_eq!(error.as_ref().map(Error::kind), Some(ErrorKind::Secret));
+        assert!(error.is_some_and(|e| e.to_string().contains("not a regular file")));
     }
 
     #[test]

@@ -1,12 +1,12 @@
 # system-suite: 1.0 readiness
 
-For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass (`dev/ROADMAP.md` v0.9.x, D-080). Last updated 2026-11-06, after the first pass; 0.8.0 is the latest release.
+For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass (`dev/ROADMAP.md` v0.9.x, D-080). Last updated 2026-11-07, during the second pass; 0.8.1 is the latest release.
 
 ## Done
 
 - Every planned feature (`dev/PLAN.md` section 8), wired and tested on Linux, macOS, and Windows; every member alone and in combination builds and passes (the feature matrix).
 - Threats T1 to T9 each have a passing attack test; `docs/SECURITY.md` states every defence's cost and the known limits.
-- Two security reviews of the whole suite (0.7, and the first pre-1.0 pass), every finding fixed; the same review of signal-mod and audit-trail, the members released for the suite (D-090).
+- Three security reviews of the whole suite (0.7, and two pre-1.0 passes, the second independent: D-089, D-094), every finding fixed or recorded as a limit with its reason; the same review of signal-mod and audit-trail, the members released for the suite (D-090). signal-mod 2.1.1's service status ordering passed its CI job that installs a real Windows service and drives it with `sc.exe`.
 - JSON configuration files and JSON and OTLP metrics on James's own jsonx-lib, without serde_json (D-090). Writing a metrics snapshot takes 0.65 to 0.77 of serde_json's time with the same bytes (jsonx-lib 0.5.1, metrics-lib 2.1.1, D-092).
 - Every performance target met and measured (`docs/PERFORMANCE.md`): boot about 0.1 ms, stop about 0.2 ms, under 100 KiB of heap, no idle CPU, a one-nanosecond urgent-line check.
 - An 8-hour soak (251,225 cycles) with no growth in memory, descriptors, or threads.
@@ -24,7 +24,6 @@ For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass
 | jsonx-lib is pre-1.0 | config-lib pins it exactly (`=0.5.1`), so every jsonx-lib release needs a config-lib release, and metrics-lib may not require a newer one than that pin (D-092) | jsonx-lib 1.0 |
 | `metrics-system` | `sysinfo` was not accepted | sys-lib 0.4's live readings could stand in; a decision for James |
 | Wake-up readings on Windows and macOS | sys-lib has no per-process wake-up reading | a sys-lib request (not filed) |
-| signal-mod's service status ordering against the real service manager | the fix is unit-tested; only the CI job that installs a real service (an elevated runner) drives the manager | that job, green on the release |
 | audit-trail's open questions | a keyed hasher (new API), an opt-out for old chains holding `0x1f`, length-prefixed fields (a format change for 2.0) | James's call; none blocks 1.0 of the suite |
 | Documented limits (`docs/SECURITY.md`) | each is the OS's own exposure, or needs a member or a std API | kept unless one of those changes |
 

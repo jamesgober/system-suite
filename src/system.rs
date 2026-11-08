@@ -755,7 +755,11 @@ impl Coalesce {
             .spawn(move || {
                 loop {
                     while pending.swap(false, AcqRel) {
-                        work();
+                        // A run that panics (a parser, a subsystem's health)
+                        // must not leave `active` set: every later signal
+                        // would be dropped. The crash hook reports it.
+                        let _contained =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(&work));
                     }
                     active.store(false, std::sync::atomic::Ordering::Release);
                     // A signal between the last check and the store above
@@ -842,6 +846,32 @@ mod tests {
         assert!(!coalesce.pending.load(Ordering::Acquire));
     }
 
+    #[cfg(feature = "signals")]
+    #[test]
+    fn test_a_panicking_signal_run_does_not_stop_later_ones() {
+        // D-094: one panicking reload or dump must not leave `active` set,
+        // or every later signal would be dropped.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coalesce = Coalesce::new("test-coalesce-panic");
+        coalesce.run(|| panic!("a reload bug"));
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while coalesce.active.load(Ordering::Acquire) && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!coalesce.active.load(Ordering::Acquire));
+        let ran = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&ran);
+        coalesce.run(move || {
+            let _n = counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ran.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+    }
+
     fn quiet(name: &str) -> Builder {
         let builder = Builder::new(name).process_wide(false).disable(Member::Log);
         #[cfg(feature = "sys")]
@@ -880,6 +910,48 @@ mod tests {
             assert_eq!(system.run(), ExitCode::SUCCESS);
             assert!(stopper.join().unwrap_or(false));
         }
+    }
+
+    #[cfg(all(feature = "config", feature = "kernel"))]
+    #[test]
+    fn test_the_shutdown_waits_only_for_a_running_reload() {
+        // D-093: with no reload running the shutdown starts no thread to
+        // wait for one; with one running it still waits, within the deadline.
+        use std::{
+            sync::mpsc,
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let system = quiet("system-unit-reload-wait").start().unwrap();
+        let reloader = system.parts.reloader.clone().unwrap();
+        assert!(reloader.is_idle());
+
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let holder = {
+            let reloader = Arc::clone(&reloader);
+            thread::spawn(move || {
+                let _running = reloader.hold();
+                held_tx.send(()).unwrap();
+                let _released = release_rx.recv_timeout(Duration::from_secs(5));
+            })
+        };
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!reloader.is_idle());
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            let _sent = release_tx.send(());
+        });
+        let began = Instant::now();
+        assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+        assert!(
+            began.elapsed() >= Duration::from_millis(90),
+            "the shutdown did not wait for the running reload"
+        );
+        holder.join().unwrap();
+        releaser.join().unwrap();
+        assert!(reloader.is_idle());
     }
 
     #[test]

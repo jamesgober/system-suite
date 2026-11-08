@@ -52,9 +52,17 @@ What the suite defends against, how, what each defence costs, and the test that 
 | a JSON configuration with a repeated key is refused (which value the operator meant is a guess), and its depth and size are budgeted before memory is allocated; a parse error names the line and column, never the text | none beyond the parse | 0.8 (D-090) |
 | an audit field holding the chain's field separator (`0x1f`) is recorded with U+FFFD in its place, so text from a request cannot keep its record out of the chain, and the hashed fields stay unambiguous (audit-trail 1.2) | one scan of each field, no allocation unless the byte is there | 0.8 (D-090) |
 | only the kernel publishes kernel events; application code can listen, never forge one | none | 0.8 (D-085) |
-| each urgent change, its epoch, and its reason are one ordered step, so the audit names the change that happened; a same-level `set` changes nothing, and reasons are cut to 256 bytes, so a caller cannot flood the log and the audit chain or copy megabytes to every mailbox | one uncontended lock per change; readers take none | 0.9 polish (D-089) |
-| the shutdown's own audit record is bounded by the deadline, and a reload in progress finishes before the subsystems stop; a shutdown nobody requested still refuses new reloads | one thread at shutdown when audit is on | 0.9 polish (D-089) |
-| a flood of reload or dump signals runs one thread at a time, later signals folded into one more run | two atomics per signal | 0.9 polish (D-089) |
+| each urgent change, its epoch, and its reason are one ordered step, so the audit names the change that happened; a same-level `set` changes nothing, and reasons are cut to 256 bytes, so a caller cannot flood the log and the audit chain or copy megabytes to every mailbox | one uncontended lock per change; readers take none | 0.8 (D-089) |
+| the shutdown's own audit record is bounded by the deadline, and a reload in progress finishes before the subsystems stop; a shutdown nobody requested still refuses new reloads | one thread at shutdown when audit is on | 0.8 (D-089) |
+| a flood of reload or dump signals runs one thread at a time, later signals folded into one more run | two atomics per signal | 0.8 (D-089) |
+| a TOML or NOML file cannot pull in another file (`include`) or the environment (`env()`): config-lib 1.3's strict parse refuses both with a position, so every value comes from the one file that passed the owner, mode, size, and regular-file checks | about 12 µs on a 4 KiB NOML file | 0.8.1 (D-094) |
+| secrets inside lists are checked like any other: a plain value under a secret-looking key in a list's table is refused, and so is a reference anywhere in a list | none (the same walk) | 0.8.1 (D-094) |
+| a configuration that spells one key twice, nested and with a dot in a key, is refused (a lookup would answer differently depending on which exists), and a dotted top-level key for a suite section (`kernel.notify = false`) is refused instead of silently ignored | one walk of the keys at parse | 0.8.1 (D-094) |
+| a parser that panics on a file refuses the file; a subsystem whose `health` panics is reported `Unhealthy`, at boot as later; a panicking reload or dump run does not stop later signals | none | 0.8.1 (D-094) |
+| a `file:` secret, the audit chain, and its anchor must be regular files, checked before opening, and the anchor is read only to 4 KiB | one `stat` each | 0.8.1 (D-094) |
+| each audit field is cut to 4 KiB at a character boundary, so request text cannot make one record megabytes long; a record appended but not synced is reported as such, so it is not recorded twice | none | 0.8.1 (D-094) |
+| cancelled timers are swept when the table has doubled, so cancelling and re-arming holds about twice the live timers | O(1) per timer armed, amortized | 0.8.1 (D-094) |
+| a slow audit disk cannot take the subsystems' time at shutdown: the stop record is written through to the operating system at step 1 and synced at step 5, and step 1 is bounded by the subsystems' share; a power loss before step 5 loses that one record | one sync fewer per stop | 0.8.1 (D-095) |
 
 ## Known limits
 
@@ -67,6 +75,8 @@ Each is recorded with its reason in the decision log (D-079).
 | the panic hook the application installs after boot is replaced at shutdown by the one from before boot | the standard library keeps one process-wide hook and cannot tell whose it is; install yours before boot (the suite's hook calls it) |
 | members' set-once global slots (the global logger, the global metrics registry) stay installed after a boot that failed after setting them | the members allow setting them once; a failed boot ends the process in every documented use |
 | event handlers run on the thread that tears down, outside the shutdown deadline | they are the application's code and must return quickly; bounding each would cost a thread per event |
+| a file checked as regular and then opened can be swapped for a FIFO between the two calls, which blocks that open | only a user who can write the directory can swap it, and the directory checks already make that the owner, who can change the configuration anyway; opening without blocking needs a flag per OS, which belongs in a member |
+| a shutdown step runs on the calling thread, without its deadline, when the OS refuses a thread | skipping the step would lose the log's last lines or the audit sync; an OS that refuses one small thread is already failing |
 | on Windows the file checks rely on the directory's access control list, which is set owner-only when the suite creates it | reading a file's access control list needs OS calls the suite does not make itself |
 
 ## Reporting a vulnerability

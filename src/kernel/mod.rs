@@ -93,6 +93,13 @@ struct Control {
     events: OnceLock<Events>,
 }
 
+/// A subsystem's `health`, with a panic reported as `Unhealthy` instead of
+/// unwinding into the caller: the boot, a dump, a health endpoint (D-094).
+pub(crate) fn checked_health(subsystem: &dyn Subsystem) -> Health {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| subsystem.health()))
+        .unwrap_or_else(|_| Health::unhealthy("its health check panicked"))
+}
+
 /// A started subsystem, as the kernel holds it.
 pub(crate) struct Slot {
     pub(crate) name: String,
@@ -107,12 +114,12 @@ impl Slot {
     fn health(&self) -> Health {
         match self.subsystem.try_lock() {
             Ok(subsystem) => {
-                let health = subsystem.health();
+                let health = checked_health(subsystem.as_ref());
                 *self.last.lock().unwrap_or_else(PoisonError::into_inner) = health.clone();
                 health
             }
             Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-                let health = poisoned.into_inner().health();
+                let health = checked_health(poisoned.into_inner().as_ref());
                 *self.last.lock().unwrap_or_else(PoisonError::into_inner) = health.clone();
                 health
             }

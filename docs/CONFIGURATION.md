@@ -23,10 +23,11 @@ Every key the suite reads, with its type, default, and what it does. Every secti
 | | |
 |---|---|
 | Where | the first that applies: `Builder::config_file` or `config_str`; the file named by `<NAME>_CONFIG` (process environment, then the `.env` file); `<config dir>/<name>.conf`; `./<name>.conf` when the process is not elevated |
-| Format | config-lib's `conf`: `[section]` headers, `key = value`, `#` comments, quoted strings, `[a, b]` lists. `.toml` with `config-toml`, `.noml` with `config-noml`, `.json` with `config-json` (the format follows the extension). JSON is read strictly: a repeated key is an error, not a choice of the last one; the top level is an object of sections |
+| Format | config-lib's `conf`: `[section]` headers, `key = value`, `#` comments, quoted strings, `[a, b]` lists. `.toml` with `config-toml`, `.noml` with `config-noml`, `.json` with `config-json` (the format follows the extension). JSON is read strictly: a repeated key is an error, not a choice of the last one; the top level is an object of sections. TOML and NOML files are read strictly too: NOML's `include` and its functions (`env()` and the rest) are refused, so a file cannot pull in another file or the environment; a secret comes from `env:`, `file:`, or `vault:` instead |
 | Size | at most 1 MiB |
 | Owner and mode (Unix) | owned by the service's user or root, not group- or world-writable; checked on the opened file. There is no switch to accept another file |
 | Unknown keys | refused in the suite's sections below (a misspelt key cannot silently keep its default); not checked in the application's sections |
+| Dotted keys | in `conf` and JSON, and as a quoted TOML key, `a.b = 1` is one key with a dot in it. A file that also has `b` under `[a]` is refused (the two spellings would answer a lookup differently), and so is a dotted top-level key for a suite section such as `kernel.notify = false`, which would otherwise be ignored: write it under `[kernel]` |
 | Errors | position only (line and column); a value is never quoted |
 | Reload | SIGHUP (Unix), the service manager's parameter-change control (Windows), or `System::reload`: all or nothing |
 
@@ -127,10 +128,10 @@ Any value of the form below is a reference, resolved at boot step 8 (and on relo
 | Reference | Resolved from | Refused when |
 |---|---|---|
 | `env:NAME` | the process environment, then the `.env` file | unset or empty |
-| `file:/path` | the file's contents, one trailing newline removed | relative path, missing, over 64 KiB, or (Unix) any group or other permission bit, or another owner |
+| `file:/path` | the file's contents, one trailing newline removed | relative path, missing, not a regular file, over 64 KiB, or (Unix) any group or other permission bit, or another owner |
 | `vault:name` | a key registered with `Builder::on_vault` | no such name |
 
-A key whose last segment is, or ends with `_` and, one of `password`, `passwd`, `passphrase`, `secret`, `token`, `api_key`, `apikey`, `private_key`, `credentials`, `client_secret`, `secret_key`, `access_key` must hold a reference (`PlainSecret` otherwise, unless `allow_plain`). Without the `secrets` feature every reference is refused (`Secret`), so a reference is never taken as a literal password.
+A key whose last segment is, or ends with `_` and, one of `password`, `passwd`, `passphrase`, `secret`, `token`, `api_key`, `apikey`, `private_key`, `credentials`, `client_secret`, `secret_key`, `access_key` must hold a reference (`PlainSecret` otherwise, unless `allow_plain`); keys inside a list's tables (`[[pools]]` with `password = ...`) count too. A reference inside a list is refused (`Secret`): it would have no name of its own. Without the `secrets` feature every reference is refused (`Secret`), so a reference is never taken as a literal password.
 
 ## Environment variables
 

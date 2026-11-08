@@ -206,7 +206,26 @@ pub(crate) fn parse(text: &str, source: Option<&Path>, version: u64) -> Result<C
         Some(path) => format_of(path)?,
         None => "conf",
     };
-    let document = config_lib::Config::from_string(text, Some(format)).map_err(|e| {
+    let file_name = || {
+        source.map_or_else(
+            || "the configuration".to_owned(),
+            |p| p.display().to_string(),
+        )
+    };
+    // Strict: NOML's `include` and its functions (`env()`) are refused, so
+    // every byte the configuration holds comes from this checked file
+    // (D-094). A parser that panics on some input is a refused file, not
+    // a crashed boot or a dead reload thread.
+    let Ok(parsed) =
+        std::panic::catch_unwind(|| config_lib::Config::from_string_strict(text, Some(format)))
+    else {
+        return Err(Error::new(
+            ErrorKind::ConfigInvalid,
+            format!("{} does not parse (the parser failed on it)", file_name()),
+            "check the file for unusual characters; nothing was changed",
+        ));
+    };
+    let document = parsed.map_err(|e| {
         // Only the position: the parser's message may quote the text, and
         // the text may hold a secret.
         let at = match &e {
@@ -215,30 +234,64 @@ pub(crate) fn parse(text: &str, source: Option<&Path>, version: u64) -> Result<C
             }
             _ => String::new(),
         };
-        let file = source.map_or_else(
-            || "the configuration".to_owned(),
-            |p| p.display().to_string(),
-        );
         Error::new(
             ErrorKind::ConfigInvalid,
-            format!("{file} does not parse{at}"),
+            format!("{} does not parse{at}", file_name()),
             "fix the line named in the message; values with spaces need quotes",
         )
     })?;
     // A JSON file may hold any value at its top level; only an object of
     // sections is a configuration (the other formats always give one).
     if !matches!(document.as_value(), config_lib::Value::Table(_)) {
-        let file = source.map_or_else(
-            || "the configuration".to_owned(),
-            |p| p.display().to_string(),
-        );
         return Err(Error::new(
             ErrorKind::ConfigInvalid,
-            format!("{file} is not a table of sections at its top level"),
+            format!(
+                "{} is not a table of sections at its top level",
+                file_name()
+            ),
             "write the file as an object whose keys are the sections",
         ));
     }
+    refuse_ambiguous_keys(document.as_value(), &file_name)?;
     Ok(Config::new(document, source, version))
+}
+
+/// Refuses a configuration in which two keys spell the same dotted path:
+/// `{"db": {"password": "env:A"}, "db.password": "env:B"}` in JSON, a
+/// quoted TOML key, or a `conf` key with a dot in it. A lookup reads the
+/// nested one and falls back to the flat one, so the two would answer
+/// differently depending on which exists (D-094). One walk; keys are
+/// named, values never.
+fn refuse_ambiguous_keys(
+    root: &config_lib::Value,
+    file_name: &dyn Fn() -> String,
+) -> Result<(), Error> {
+    let mut seen = std::collections::HashSet::new();
+    let mut tables = vec![(String::new(), root)];
+    while let Some((prefix, value)) = tables.pop() {
+        let config_lib::Value::Table(table) = value else {
+            continue;
+        };
+        for (key, child) in table {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
+            if !seen.insert(path.clone()) {
+                return Err(Error::new(
+                    ErrorKind::ConfigInvalid,
+                    format!(
+                        "{} names the key `{path}` twice, once with a dot in a key",
+                        file_name()
+                    ),
+                    "write the key one way only, as a section or as a dotted name",
+                ));
+            }
+            tables.push((path, child));
+        }
+    }
+    Ok(())
 }
 
 /// Reads a file the process trusts for configuration: refused when another
@@ -441,6 +494,68 @@ mod tests {
         assert!(!text.contains("hunter2"), "{text}");
     }
 
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn test_toml_refuses_include_and_env() {
+        // D-094: an included file would skip every check this file passed.
+        for text in [
+            "[app]\nx = include \"other.toml\"\n",
+            "[app]\nx = env(\"PATH\")\n",
+        ] {
+            let error = parse(text, Some(Path::new("site.toml")), 1).err();
+            let shown = error.as_ref().map(ToString::to_string).unwrap_or_default();
+            assert!(
+                !shown.contains("PATH") && !shown.contains("other"),
+                "{shown}"
+            );
+            assert_eq!(
+                error.map(|e| e.kind()),
+                Some(ErrorKind::ConfigInvalid),
+                "{text}"
+            );
+        }
+    }
+
+    #[cfg(feature = "config-noml")]
+    #[test]
+    fn test_noml_refuses_include_and_env() {
+        for text in [
+            "[app]\nx = include \"other.noml\"\n",
+            "[app]\nx = env(\"PATH\")\n",
+        ] {
+            let error = parse(text, Some(Path::new("site.noml")), 1).err();
+            assert_eq!(
+                error.map(|e| e.kind()),
+                Some(ErrorKind::ConfigInvalid),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bracket_lists_of_unquoted_items_parse() {
+        let config = parse(
+            "[http]
+ports = [80, 443]
+",
+            None,
+            1,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let ports: Vec<u16> = config.require("http.ports").unwrap_or_default();
+        assert_eq!(ports, [80, 443]);
+    }
+
+    #[test]
+    fn test_non_ascii_text_parses() {
+        let config = parse("# café settings\n[app]\nname = \"café\"\n", None, 1)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            config.get::<String>("app.name").ok().flatten().as_deref(),
+            Some("café")
+        );
+    }
+
     #[cfg(feature = "config-noml")]
     #[test]
     fn test_noml_files_parse_into_the_same_view() {
@@ -493,6 +608,31 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn test_a_key_spelled_twice_is_refused() {
+        // D-094: `db.password` flat and `password` under `[db]` would
+        // answer a lookup differently depending on which exists.
+        let error = parse("db.password = 2\n[db]\npassword = 1\n", None, 1).err();
+        let text = error.as_ref().map(ToString::to_string).unwrap_or_default();
+        assert!(text.contains("db.password"), "{text}");
+        assert_eq!(error.map(|e| e.kind()), Some(ErrorKind::ConfigInvalid));
+        // One spelling alone is fine either way.
+        assert!(parse("db.password = 2\n", None, 1).is_ok());
+        assert!(parse("[db]\npassword = 1\n", None, 1).is_ok());
+    }
+
+    #[cfg(feature = "config-json")]
+    #[test]
+    fn test_json_refuses_a_key_spelled_twice() {
+        let error = parse(
+            "{\"db\": {\"password\": \"env:A\"}, \"db.password\": \"env:B\"}",
+            Some(Path::new("site.json")),
+            1,
+        )
+        .err();
+        assert_eq!(error.map(|e| e.kind()), Some(ErrorKind::ConfigInvalid));
     }
 
     #[cfg(feature = "config-json")]

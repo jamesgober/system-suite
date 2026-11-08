@@ -127,10 +127,10 @@ Every member is behind its own feature, and every feature is additive: turning o
 | Feature | Default | Member (crate) | Brings | Third-party runtime dependencies |
 |---|---|---|---|---|
 | `kernel` | yes | this crate: modules `kernel`, `lifecycle`, `runtime` | signals to decisions, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
-| `sys` | yes | sys-lib 0.3 | build info, instance info, process guard | none |
+| `sys` | yes | sys-lib 0.5 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1.1 | application and OS directories, owner-only where the suite writes | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
-| `config` | yes | config-lib 1.2, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
+| `config` | yes | config-lib 1.3, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2.1 | structured logging, the crash report's recent lines | none |
 | `metrics` | yes | metrics-lib 2 (counters, gauges, timers; no integrations) | the system's registry and the kernel's own metrics | none |
 | `signals` | yes | signal-mod 2, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |

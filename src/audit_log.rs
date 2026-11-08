@@ -128,16 +128,31 @@ impl AuditLog {
         // An existing chain (perhaps at a configured `[audit] file`) is
         // refused when another user could rewrite it; a new one is created
         // owner-only by audit-trail.
-        if path.exists() {
-            let existing = File::open(path).map_err(|e| {
-                Error::new(
+        // A regular file only, checked before opening: opening a FIFO
+        // would block the boot.
+        let cannot_open = |e: &std::io::Error| {
+            Error::new(
+                ErrorKind::Audit,
+                format!("the audit chain {} cannot be opened: {e}", path.display()),
+                "check that the data directory is readable by the service's user",
+            )
+            .member_of(Member::Audit)
+        };
+        match std::fs::metadata(path) {
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(Error::new(
                     ErrorKind::Audit,
-                    format!("the audit chain {} cannot be opened: {e}", path.display()),
-                    "check that the data directory is readable by the service's user",
+                    format!("the audit chain {} is not a regular file", path.display()),
+                    "move whatever is at that path aside; the chain is created there",
                 )
-                .member_of(Member::Audit)
-            })?;
-            crate::secure_file::check_open(&existing, path, "audit chain")?;
+                .member_of(Member::Audit));
+            }
+            Ok(_) => {
+                let existing = File::open(path).map_err(|e| cannot_open(&e))?;
+                crate::secure_file::check_open(&existing, path, "audit chain")?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(cannot_open(&e)),
         }
         let clock = MonotonicClock::new(SystemClock::new());
         let opened = if repair_tail {
@@ -178,12 +193,15 @@ impl AuditLog {
     /// The byte `0x1f` separates the hashed fields, so audit-trail refuses
     /// it inside one; here it is recorded as U+FFFD instead, so a caller
     /// that passes text from a request (a user name, a path) cannot keep
-    /// its record out of the chain (D-090).
+    /// its record out of the chain (D-090). Each field is cut to 4 KiB, so
+    /// such text cannot make one record megabytes long (D-094).
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Audit`] when the record cannot be written or synced;
-    /// [`ErrorKind::Disabled`] when audit is disabled.
+    /// [`ErrorKind::Audit`] when the record cannot be written, or was
+    /// written and cannot be synced (its message says which: do not
+    /// record it again then); [`ErrorKind::Disabled`] when audit is
+    /// disabled.
     pub fn record(
         &self,
         actor: &str,
@@ -191,21 +209,51 @@ impl AuditLog {
         target: &str,
         outcome: Outcome,
     ) -> Result<RecordId, Error> {
+        self.append(actor, action, target, outcome, false)
+    }
+
+    /// The shutdown's own stop record: written through to the operating
+    /// system, so it survives the process dying, but not synced whatever
+    /// the sync policy. Shutdown step 5 syncs it with every other record
+    /// before the members close, so a slow disk cannot spend the
+    /// subsystems' share of the deadline here (D-095).
+    pub(crate) fn record_unsynced(
+        &self,
+        actor: &str,
+        action: &str,
+        target: &str,
+        outcome: Outcome,
+    ) -> Result<RecordId, Error> {
+        self.append(actor, action, target, outcome, true)
+    }
+
+    fn append(
+        &self,
+        actor: &str,
+        action: &str,
+        target: &str,
+        outcome: Outcome,
+        defer_sync: bool,
+    ) -> Result<RecordId, Error> {
         let open = self.chain_file()?;
         let mut chain = lock(&open.chain);
         let id = chain
             .append(
-                Actor::new(&no_separator(actor)),
-                Action::new(&no_separator(action)),
-                Target::new(&no_separator(target)),
+                Actor::new(&field(actor)),
+                Action::new(&field(action)),
+                Target::new(&field(target)),
                 outcome,
             )
             .map_err(|e| write_error(&open.path, &e.to_string()))?;
-        if open.sync_every {
+        if defer_sync {
+            chain
+                .flush()
+                .map_err(|e| write_error(&open.path, &e.to_string()))?;
+        } else if open.sync_every {
             chain
                 .sink_mut()
                 .sync()
-                .map_err(|e| write_error(&open.path, &e.to_string()))?;
+                .map_err(|e| sync_error(&open.path, &e.to_string()))?;
             open.anchor_tail(&chain)?;
         }
         Ok(id)
@@ -329,7 +377,7 @@ fn write_anchor(anchor: &Path, next_id: RecordId, last_hash: Digest) -> Result<(
 /// anchor is not the one anchored: the chain was shortened, replaced, or
 /// rewritten (the 0.5 defence idea, D-072).
 fn check_anchor(anchor: &Path, path: &Path, chain: &AuditChain) -> Result<(), Error> {
-    let text = match std::fs::read_to_string(anchor) {
+    let text = match read_anchor(anchor) {
         Ok(text) => text,
         // No anchor yet: the first boot with one; it is written now.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -409,8 +457,23 @@ pub(crate) struct OpenSummary {
 /// inside a field.
 const SEPARATOR: char = '\u{1f}';
 
+/// The longest field recorded, in bytes; a longer one is cut at a
+/// character boundary (D-094).
+const MAX_FIELD: usize = 4096;
+
+/// `text` as recorded: cut to [`MAX_FIELD`] bytes, then every separator
+/// replaced by U+FFFD. Borrowed (no allocation) when neither applies,
+/// which is every field the suite writes.
+fn field(text: &str) -> Cow<'_, str> {
+    let mut end = text.len().min(MAX_FIELD);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    no_separator(&text[..end])
+}
+
 /// `field` with every separator replaced by U+FFFD; borrowed (no
-/// allocation) when there is none, which is every field the suite writes.
+/// allocation) when there is none.
 fn no_separator(field: &str) -> Cow<'_, str> {
     if field.contains(SEPARATOR) {
         Cow::Owned(field.replace(SEPARATOR, "\u{fffd}"))
@@ -419,8 +482,38 @@ fn no_separator(field: &str) -> Cow<'_, str> {
     }
 }
 
+/// The anchor file's text, read only from a regular file and only its
+/// first 4 KiB: an anchor is one short line.
+fn read_anchor(anchor: &Path) -> std::io::Result<String> {
+    use std::io::Read as _;
+
+    if !std::fs::metadata(anchor)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a regular file",
+        ));
+    }
+    let mut text = String::new();
+    let _read = File::open(anchor)?.take(4096).read_to_string(&mut text)?;
+    Ok(text)
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The record is in the chain but may not be on disk: a caller that
+/// retries would write it twice.
+fn sync_error(path: &Path, detail: &str) -> Error {
+    Error::new(
+        ErrorKind::Audit,
+        format!(
+            "the audit chain {} cannot be synced: {detail}",
+            path.display()
+        ),
+        "check the disk; the record was appended but may not be on disk, so do not record it again",
+    )
+    .member_of(Member::Audit)
 }
 
 fn write_error(path: &Path, detail: &str) -> Error {
