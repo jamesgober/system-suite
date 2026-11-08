@@ -1,12 +1,12 @@
 # system-suite: 1.0 readiness
 
-For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass (`dev/ROADMAP.md` v0.9.x, D-080). Last updated 2026-11-07, during the second pass; 0.8.1 is the latest release.
+For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass (`dev/ROADMAP.md` v0.9.x, D-080). Last updated 2026-11-08, after the second pass; 0.8.1 is the latest release.
 
 ## Done
 
 - Every planned feature (`dev/PLAN.md` section 8), wired and tested on Linux, macOS, and Windows; every member alone and in combination builds and passes (the feature matrix).
 - Threats T1 to T9 each have a passing attack test; `docs/SECURITY.md` states every defence's cost and the known limits.
-- Three security reviews of the whole suite (0.7, and two pre-1.0 passes, the second independent: D-089, D-094), every finding fixed or recorded as a limit with its reason; the same review of signal-mod and audit-trail, the members released for the suite (D-090). signal-mod 2.1.1's service status ordering passed its CI job that installs a real Windows service and drives it with `sc.exe`.
+- Three security reviews of the whole suite (0.7, and two pre-1.0 passes, the second independent: D-089, D-094), every finding fixed or recorded as a limit with its reason; the same review of signal-mod and audit-trail, the members released for the suite (D-090), and of config-lib (1.3.0 and 1.3.1: strict TOML and NOML, and four ways the INI and CONF parsers misread a file). After the second pass the Linux gate found the stop's audit record spending the subsystems' part of the deadline on a slow disk; fixed in 0.8.1 (D-095). signal-mod 2.1.1's service status ordering passed its CI job that installs a real Windows service and drives it with `sc.exe`.
 - JSON configuration files and JSON and OTLP metrics on James's own jsonx-lib, without serde_json (D-090). Writing a metrics snapshot takes 0.65 to 0.77 of serde_json's time with the same bytes (jsonx-lib 0.5.1, metrics-lib 2.1.1, D-092).
 - Every performance target met and measured (`docs/PERFORMANCE.md`): boot about 0.1 ms, stop about 0.2 ms, under 100 KiB of heap, no idle CPU, a one-nanosecond urgent-line check.
 - An 8-hour soak (251,225 cycles) with no growth in memory, descriptors, or threads.
