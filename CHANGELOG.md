@@ -11,7 +11,7 @@
 
 ## [Unreleased]
 
-## [0.8.1] - 2026-11-07
+## [0.8.1] - 2026-11-08
 
 The second pre-1.0 pass: an independent security review of the whole
 suite, every finding fixed or recorded, config-lib 1.3's strict parsing,
