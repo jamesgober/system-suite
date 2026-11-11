@@ -6,7 +6,12 @@
 //! root under the temporary directory, so several run side by side and
 //! nothing touches the user's own directories.
 
-#![cfg(all(feature = "kernel", feature = "sys", feature = "config", feature = "paths"))]
+#![cfg(all(
+    feature = "kernel",
+    feature = "sys",
+    feature = "config",
+    feature = "paths"
+))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::{
