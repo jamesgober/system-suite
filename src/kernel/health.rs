@@ -150,7 +150,6 @@ pub struct ComponentHealth {
 ///
 /// # #[cfg(feature = "sys")] {
 /// let system = System::builder("health-doc")
-/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("health-doc"))
 ///     .process_wide(false)
 ///     .single_instance(false)
 ///     .disable(Member::Log)

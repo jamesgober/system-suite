@@ -36,6 +36,7 @@ The beta: the API simplified before 1.0. Each handle exists once, each task has 
 
 ### Fixed
 
+- The features `kernel` and `sys` without any of the others did not compile: the memory watermark checked whether the `sys` member was disabled, which it cannot be. The dead check is removed, the kernel tests and the doctests build in every pair of features, and CI now tests the common pairs too.
 - Stale documentation: `ErrorKind::Secret`, `Builder::disable` (it listed five of the nine members that can be disabled), `System::run` (exit code 70), the `conf` list example in `config`, and the boot order's secret step. The error for a secret reference without the `secrets` feature no longer says to wait for it.
 
 

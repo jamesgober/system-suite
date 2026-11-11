@@ -59,7 +59,6 @@ pub(crate) type Observer = Box<dyn Fn(Event) + Send + Sync + 'static>;
 ///
 /// # #[cfg(feature = "sys")] {
 /// let system = System::builder("runtime-doc")
-/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("runtime-doc"))
 ///     .process_wide(false)
 ///     .single_instance(false)
 ///     .disable(Member::Log)

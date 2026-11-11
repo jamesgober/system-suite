@@ -88,6 +88,17 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Common pairs
+        shell: bash
+        run: |
+          set -e
+          for f in kernel,sys kernel,config kernel,log kernel,metrics kernel,signals kernel,paths sys,config kernel,sys,config kernel,sys,config,paths; do
+            echo "::group::$f"
+            cargo clippy --all-targets --no-default-features --features "$f" -- -D warnings
+            cargo test --no-default-features --features "$f"
+            echo "::endgroup::"
+          done
+
   bench:
     name: Boot benchmark, ${{ matrix.os }} (no gate on shared runners)
     runs-on: ${{ matrix.os }}

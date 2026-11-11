@@ -27,7 +27,7 @@ use crate::{Builder, Error, boot::Parts, logging::Val};
 /// ```
 /// use system_suite::{Member, System};
 ///
-/// # #[cfg(feature = "sys")] {
+/// # #[cfg(all(feature = "sys", feature = "paths"))] {
 /// let system = System::builder("foundation-doc")
 /// #     .portable(std::env::temp_dir().join("system-suite-doc").join("foundation-doc"))
 ///     .process_wide(false)
@@ -333,9 +333,10 @@ impl System {
     /// use system_suite::{Member, Step, System};
     ///
     /// let builder = System::builder("timeline-doc")
-    /// #     .portable(std::env::temp_dir().join("system-suite-doc").join("timeline-doc"))
     ///     .process_wide(false)
     ///     .disable(Member::Log);
+    /// # #[cfg(feature = "paths")]
+    /// # let builder = builder.portable(std::env::temp_dir().join("system-suite-doc").join("timeline-doc"));
     /// # #[cfg(feature = "sys")]
     /// # let builder = builder.single_instance(false);
     /// let system = builder.start()?;

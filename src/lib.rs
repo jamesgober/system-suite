@@ -17,9 +17,12 @@
 //! signal, stop in reverse, and return the exit code.
 //!
 //! ```no_run
+//! # #[cfg(feature = "kernel")]
 //! fn main() -> std::process::ExitCode {
 //!     system_suite::run!()
 //! }
+//! # #[cfg(not(feature = "kernel"))]
+//! # fn main() {}
 //! ```
 //!
 //! With work of its own, and plain `?`:

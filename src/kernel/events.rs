@@ -35,7 +35,6 @@ impl EventGuard {
     /// use system_suite::{Member, System};
     ///
     /// let system = System::builder("keep-doc")
-    /// #     .portable(std::env::temp_dir().join("system-suite-doc").join("keep-doc"))
     ///     .process_wide(false)
     ///     .single_instance(false)
     ///     .disable(Member::Log)

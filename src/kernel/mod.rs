@@ -58,7 +58,6 @@ pub use urgent::{Level, Notice, UrgentLine, Watch};
 ///
 /// # #[cfg(feature = "sys")] {
 /// let system = System::builder("kernel-doc")
-/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("kernel-doc"))
 ///     .process_wide(false)
 ///     .single_instance(false)
 ///     .disable(Member::Log)

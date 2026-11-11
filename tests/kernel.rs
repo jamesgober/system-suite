@@ -6,7 +6,7 @@
 //! root under the temporary directory, so several run side by side and
 //! nothing touches the user's own directories.
 
-#![cfg(all(feature = "kernel", feature = "sys", feature = "config"))]
+#![cfg(all(feature = "kernel", feature = "sys", feature = "config", feature = "paths"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::{
@@ -508,6 +508,7 @@ limit = 5
     assert!(error.to_string().contains("toml"), "{error}");
 }
 
+#[cfg(feature = "ids")]
 #[test]
 fn test_ids_take_the_worker_from_the_configuration() {
     let root = Root::new("ids");

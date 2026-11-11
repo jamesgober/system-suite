@@ -53,7 +53,6 @@ use crate::{
 /// }
 ///
 /// let builder = System::builder("boot-doc")
-/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("boot-doc"))
 ///     .process_wide(false)
 ///     .disable(Member::Log);
 /// # #[cfg(feature = "sys")]

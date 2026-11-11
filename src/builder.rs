@@ -45,7 +45,7 @@ pub(crate) type OnReady =
 /// use std::time::Duration;
 /// use system_suite::{Member, System};
 ///
-/// # #[cfg(feature = "sys")] {
+/// # #[cfg(all(feature = "sys", feature = "paths"))] {
 /// let system = System::builder("builder-doc")
 /// #     .portable(std::env::temp_dir().join("system-suite-doc").join("builder-doc"))
 ///     .process_wide(false)          // touch no process-wide state (tests, embedding)
