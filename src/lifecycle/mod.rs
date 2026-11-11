@@ -88,7 +88,7 @@ impl fmt::Display for Phase {
 /// use system_suite::lifecycle::StopReason;
 ///
 /// let reason = StopReason::Requested { reason: "admin".into() };
-/// assert_eq!(reason.exit_code(), 0);
+/// assert_eq!(reason.exit_code(), std::process::ExitCode::SUCCESS);
 /// assert_eq!(reason.to_string(), "requested: admin");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,15 +113,20 @@ pub enum StopReason {
     /// The out-of-process watchdog asked, when one is present.
     Supervisor {
         /// What the supervisor said.
-        reason: String,
+        reason: std::borrow::Cow<'static, str>,
     },
 }
 
 impl StopReason {
-    /// The exit code a stop for this reason ends with: `0`, except
+    /// The exit code a stop for this reason ends with: success, except
     /// `WorkerFailed`, which is `70` (`exit::SOFTWARE`).
     #[must_use]
-    pub fn exit_code(&self) -> u8 {
+    pub fn exit_code(&self) -> std::process::ExitCode {
+        std::process::ExitCode::from(self.exit_value())
+    }
+
+    /// [`exit_code`](Self::exit_code) as a number.
+    pub(crate) fn exit_value(&self) -> u8 {
         match self {
             StopReason::WorkerFailed { .. } => crate::exit::SOFTWARE,
             _ => crate::exit::OK,
@@ -223,12 +228,12 @@ mod tests {
 
     #[test]
     fn test_stop_reason_exit_codes() {
-        assert_eq!(StopReason::Signal { name: "SIGTERM" }.exit_code(), 0);
+        assert_eq!(StopReason::Signal { name: "SIGTERM" }.exit_value(), 0);
         assert_eq!(
             StopReason::WorkerFailed {
                 name: "jobs".to_owned()
             }
-            .exit_code(),
+            .exit_value(),
             70
         );
         assert_eq!(

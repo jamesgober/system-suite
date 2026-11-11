@@ -269,16 +269,16 @@ fn slow_boot(root: &Path) -> u8 {
 fn exit_value(kind: ErrorKind) -> u8 {
     match kind {
         ErrorKind::Setup => exit::USAGE,
-        ErrorKind::Paths | ErrorKind::Logging => exit::CANTCREAT,
+        ErrorKind::Paths | ErrorKind::Logging => exit::CANNOT_CREATE,
         ErrorKind::Environment
         | ErrorKind::ConfigNotFound
         | ErrorKind::ConfigInvalid
         | ErrorKind::Secret => exit::CONFIG,
-        ErrorKind::AlreadyRunning => exit::TEMPFAIL,
-        ErrorKind::LockDirInsecure | ErrorKind::ConfigInsecure => exit::NOPERM,
+        ErrorKind::AlreadyRunning => exit::TEMPORARY_FAILURE,
+        ErrorKind::LockDirInsecure | ErrorKind::ConfigInsecure => exit::NO_PERMISSION,
         ErrorKind::Limits => exit::UNAVAILABLE,
         ErrorKind::Interrupted => exit::OK,
-        ErrorKind::Io => exit::IOERR,
+        ErrorKind::Io => exit::IO_ERROR,
         _ => exit::SOFTWARE,
     }
 }
@@ -715,7 +715,7 @@ fn test_t1_second_copy_is_refused() {
     let scenario = Scenario::new("it-twice");
     let (mut first, _) = scenario.spawn_ready("serve", |_| {});
     let second = scenario.run("boot");
-    assert_eq!(code(&second), Some(i32::from(exit::TEMPFAIL)));
+    assert_eq!(code(&second), Some(i32::from(exit::TEMPORARY_FAILURE)));
     let stderr = text(&second.stderr);
     assert!(stderr.contains("step 6 (guard)"), "{stderr}");
     assert!(stderr.contains("do:"), "{stderr}");
@@ -915,7 +915,7 @@ fn assert_boot_fails(output: &Output, step: &str, exit_code: u8) {
 fn test_t4_paths_step_fails_on_a_relative_override() {
     let mut scenario = Scenario::new("it-paths");
     scenario.set("LOGS_DIR", "relative/logs");
-    assert_boot_fails(&scenario.run("boot"), "step 3 (paths)", exit::CANTCREAT);
+    assert_boot_fails(&scenario.run("boot"), "step 3 (paths)", exit::CANNOT_CREATE);
     assert!(
         !scenario.dir("runtime").exists(),
         "the guard ran after a failed step"
@@ -953,7 +953,11 @@ fn test_t4_environment_step_refuses_a_file_others_can_change() {
     let file = scenario.dir("config").join(".env");
     write_private(&file, "PORT=8080\n");
     fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).unwrap();
-    assert_boot_fails(&scenario.run("boot"), "step 4 (environment)", exit::NOPERM);
+    assert_boot_fails(
+        &scenario.run("boot"),
+        "step 4 (environment)",
+        exit::NO_PERMISSION,
+    );
 }
 
 #[test]
@@ -1035,7 +1039,7 @@ fn test_t4_configuration_step_refuses_a_file_others_can_change() {
     assert_boot_fails(
         &scenario.run("boot"),
         "step 5 (configuration)",
-        exit::NOPERM,
+        exit::NO_PERMISSION,
     );
 }
 
@@ -1061,7 +1065,7 @@ fn test_t4_guard_step_fails_on_a_world_writable_lock_directory() {
     let runtime = scenario.dir("runtime");
     fs::create_dir_all(&runtime).unwrap();
     fs::set_permissions(&runtime, fs::Permissions::from_mode(0o777)).unwrap();
-    assert_boot_fails(&scenario.run("boot"), "step 6 (guard)", exit::NOPERM);
+    assert_boot_fails(&scenario.run("boot"), "step 6 (guard)", exit::NO_PERMISSION);
 }
 
 #[test]
@@ -1073,7 +1077,7 @@ fn test_t4_directories_step_fails_when_a_file_is_in_the_way() {
     assert_boot_fails(
         &scenario.run("boot"),
         "step 9 (directories)",
-        exit::CANTCREAT,
+        exit::CANNOT_CREATE,
     );
 }
 
@@ -1082,5 +1086,5 @@ fn test_t4_logging_step_fails_when_the_log_file_is_a_directory() {
     let scenario = Scenario::new("it-logfile");
     fs::create_dir_all(scenario.dir("logs").join("it-logfile.log")).unwrap();
     let output = scenario.run("boot");
-    assert_boot_fails(&output, "step 10 (logging)", exit::CANTCREAT);
+    assert_boot_fails(&output, "step 10 (logging)", exit::CANNOT_CREATE);
 }

@@ -89,12 +89,14 @@ Requires: sys-lib 0.4.0 (published 2026-10-30).
 ## v0.8.0 - Alpha
 Exit: two real consumers boot on it on every listed environment.
 0.8.0 released on 2026-11-06 so a consumer can depend on it (D-091); the exit items below stay open on the 0.8 line.
-- [ ] Used by WASP's boot and a Hive DB start-up on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, and a Docker container with limits. **Blocked (2026-11-02):** neither consumer depends on the suite yet: no `Cargo.toml` outside this repository names it. The suite cannot meet this exit by itself; a consumer has to adopt it.
+- [ ] Used by WASP's boot and a Hive DB start-up on Windows 11, WSL 2 Ubuntu, a Linux server, macOS on Apple silicon, and a Docker container with limits. **Blocked (2026-11-02):** neither consumer depends on the suite yet: no `Cargo.toml` outside this repository names it. The suite cannot meet this exit by itself; a consumer has to adopt it. **WASP (2026-11-11):** WASP's gateway boots on the suite (0.8; `System::builder`, the staged `Boot`, `run`, reload); Hive DB does not yet.
 - [x] The environments the suite can reach by itself, with `examples/service.rs` standing in until a consumer does: Windows, Linux, and macOS in CI, and a container limited to 256 MiB and 1 CPU, run as a user with no entry in the user database (`.github/scripts/container-test.sh`, D-083).
 - [ ] API review against real use; changes made now, not after 1.0. Done against the planned consumers' specification (2026-11-03): the breaking changes are made (D-084 to D-086), the additive ones listed for a consumer to ask for (D-087). Still to do against real use, once a consumer runs on it.
 
 ## v0.9.0 - Beta and release candidates
 Exit: two weeks without an API change; every document checked against the build; James's review below done.
+0.9.0 released on 2026-11-11 with the simplicity pass, because it breaks the API (D-096); 0.8's open exit items carry into 0.9, and the two weeks count from 0.9.0.
+- [x] The simplicity pass (James, 2026-11-11): one-line Tier 1 entry points (`run!()`, and `start!()?` with a readable error), plain names, one way to do each thing, `docs/API.md` as a task-oriented tour run as doctests, and `docs/MIGRATION-0.9.md` (D-096).
 - [ ] **James's pre-1.0 review**, before the API is frozen: the API, the workflow, and anything he wants added before 1.0. Whatever he adds goes into this roadmap (into 0.9 or a new milestone before 1.0) with its exit criteria; 1.0 waits for it.
 - [ ] API frozen; `0.9.x` only fixes.
 - [ ] `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.

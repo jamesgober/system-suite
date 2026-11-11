@@ -9,6 +9,7 @@
 //! (D-094).
 
 use std::{
+    borrow::Cow,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
     fmt,
@@ -47,15 +48,15 @@ pub(crate) fn check_interval(name: &str, interval: Duration) -> Result<(), Error
 /// A timer. Cheap to clone; every clone controls the same timer.
 #[derive(Clone)]
 pub struct TimerHandle {
-    name: &'static str,
+    name: Cow<'static, str>,
     state: Arc<AtomicU8>,
 }
 
 impl TimerHandle {
     /// The timer's name.
     #[must_use]
-    pub fn name(&self) -> &'static str {
-        self.name
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Cancels the timer. Returns `false` if it already fired (one-shot) or
@@ -88,7 +89,7 @@ enum Callback {
 }
 
 struct Entry {
-    name: &'static str,
+    name: Cow<'static, str>,
     period: Option<Duration>,
     callback: Option<Callback>,
     state: Arc<AtomicU8>,
@@ -102,7 +103,7 @@ struct State {
     /// How many entries the table held after the last sweep.
     swept_at: usize,
     stopping: bool,
-    panicked: Option<&'static str>,
+    panicked: Option<Cow<'static, str>>,
 }
 
 /// Every timer of a runtime: a heap, one thread, one condition variable.
@@ -125,7 +126,7 @@ impl Timers {
 
     pub(crate) fn every(
         &self,
-        name: &'static str,
+        name: Cow<'static, str>,
         period: Duration,
         tick: Box<dyn FnMut() + Send + 'static>,
         runtime: Arc<Inner>,
@@ -135,7 +136,7 @@ impl Timers {
 
     pub(crate) fn after(
         &self,
-        name: &'static str,
+        name: Cow<'static, str>,
         delay: Duration,
         fire: Box<dyn FnOnce() + Send + 'static>,
         runtime: Arc<Inner>,
@@ -145,7 +146,7 @@ impl Timers {
 
     fn arm(
         &self,
-        name: &'static str,
+        name: Cow<'static, str>,
         delay: Duration,
         period: Option<Duration>,
         callback: Callback,
@@ -174,7 +175,7 @@ impl Timers {
         let _previous = guard.entries.insert(
             id,
             Entry {
-                name,
+                name: name.clone(),
                 period,
                 callback: Some(callback),
                 state: Arc::clone(&state),
@@ -252,7 +253,7 @@ impl Timers {
 
     /// The timers' health: degraded once a callback has panicked.
     pub(crate) fn health(&self) -> Health {
-        match self.lock().panicked {
+        match &self.lock().panicked {
             Some(name) => Health::degraded(format!("timer {name} panicked and was cancelled")),
             None => Health::HEALTHY,
         }
@@ -306,7 +307,7 @@ fn run(runtime: &Inner) {
             let _removed = state.entries.remove(&id);
             continue;
         }
-        let name = entry.name;
+        let name = entry.name.clone();
         let period = entry.period;
         let callback = entry.callback.take();
         let handle_state = Arc::clone(&entry.state);
@@ -316,7 +317,7 @@ fn run(runtime: &Inner) {
         if panicked {
             handle_state.store(CANCELLED, Ordering::Release);
             let _removed = state.entries.remove(&id);
-            state.panicked = Some(name);
+            state.panicked = Some(name.clone());
             drop(state);
             runtime.emit(Event::TimerPanicked { name });
             state = timers.lock();

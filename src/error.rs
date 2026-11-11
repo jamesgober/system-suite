@@ -213,8 +213,14 @@ impl fmt::Display for Error {
     }
 }
 
+/// `{:?}` is the same block as [`Error::report`] writes, so an error that
+/// leaves `main` through `?` reads as a report: what failed, at which step,
+/// and what to do (D-096). `{:#?}` shows the fields.
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !f.alternate() {
+            return f.write_str(self.report_text().trim_end());
+        }
         f.debug_struct("Error")
             .field("kind", &self.0.kind)
             .field("step", &self.0.step)
@@ -300,10 +306,11 @@ pub enum ErrorKind {
     /// message names the file, the position or key, and the accepted values.
     /// Exit code 78.
     ConfigInvalid,
-    /// A secret reference (`env:`, `file:`, `vault:`) cannot be resolved; in
-    /// this version every reference is refused (the secrets feature arrives
-    /// in 0.5, D-031). The message names the key, never the value. Exit code
-    /// 78.
+    /// A secret reference (`env:`, `file:`, `vault:`) cannot be resolved,
+    /// a secret-looking key holds plain text, the `secrets` feature is off
+    /// and the configuration holds a reference, or an `on_vault` callback
+    /// failed (D-031). The message names the key, never the value. Exit
+    /// code 78.
     Secret,
     /// The metrics registry rejected its configuration. The message names
     /// the key. Exit code 70.
@@ -350,19 +357,19 @@ impl ErrorKind {
     pub(crate) const fn exit_value(self) -> u8 {
         match self {
             ErrorKind::Setup => exit::USAGE,
-            ErrorKind::Paths | ErrorKind::Logging => exit::CANTCREAT,
+            ErrorKind::Paths | ErrorKind::Logging => exit::CANNOT_CREATE,
             ErrorKind::Environment => exit::CONFIG,
-            ErrorKind::AlreadyRunning => exit::TEMPFAIL,
-            ErrorKind::LockDirInsecure => exit::NOPERM,
+            ErrorKind::AlreadyRunning => exit::TEMPORARY_FAILURE,
+            ErrorKind::LockDirInsecure => exit::NO_PERMISSION,
             ErrorKind::Limits => exit::UNAVAILABLE,
             ErrorKind::Signals | ErrorKind::Kernel => exit::SOFTWARE,
             ErrorKind::Interrupted => exit::OK,
-            ErrorKind::Io => exit::IOERR,
+            ErrorKind::Io => exit::IO_ERROR,
             ErrorKind::ConfigNotFound
             | ErrorKind::ConfigInvalid
             | ErrorKind::Secret
             | ErrorKind::ReloadRefused => exit::CONFIG,
-            ErrorKind::ConfigInsecure => exit::NOPERM,
+            ErrorKind::ConfigInsecure => exit::NO_PERMISSION,
             ErrorKind::Metrics
             | ErrorKind::Subsystem
             | ErrorKind::Stopping
@@ -370,8 +377,8 @@ impl ErrorKind {
             | ErrorKind::Disabled => exit::SOFTWARE,
             ErrorKind::Entropy => exit::UNAVAILABLE,
             ErrorKind::PlainSecret => exit::CONFIG,
-            ErrorKind::Audit => exit::IOERR,
-            ErrorKind::AuditTampered => exit::DATAERR,
+            ErrorKind::Audit => exit::IO_ERROR,
+            ErrorKind::AuditTampered => exit::DATA_ERROR,
         }
     }
 }
@@ -423,6 +430,18 @@ mod tests {
     }
 
     #[test]
+    fn test_error_debug_is_the_report_and_alternate_shows_fields() {
+        // `?` out of `main` prints `Error: {:?}`: it must read as a report.
+        let error = Error::new(ErrorKind::Paths, "cannot create /x", "fix it")
+            .at(Step::Directories)
+            .for_app("site");
+        assert_eq!(format!("{error:?}"), error.report_text().trim_end());
+        assert!(format!("{error:?}").contains("do: fix it"));
+        let fields = format!("{error:#?}");
+        assert!(fields.contains("kind: Paths"), "{fields}");
+    }
+
+    #[test]
     fn test_error_source_is_kept() {
         let io = io::Error::other("disk gone");
         let error = Error::new(ErrorKind::Io, "write failed", "check the disk").caused_by(io);
@@ -462,7 +481,7 @@ mod tests {
     #[test]
     fn test_error_exit_code_matches_kind() {
         let error = Error::new(ErrorKind::AlreadyRunning, "x", "y");
-        assert_eq!(error.exit_code(), ExitCode::from(exit::TEMPFAIL));
+        assert_eq!(error.exit_code(), ExitCode::from(exit::TEMPORARY_FAILURE));
     }
 
     #[test]

@@ -16,7 +16,7 @@
 //!
 //! [http]
 //! port = 8080
-//! hosts = "a.example", "b.example"
+//! hosts = ["a.example", "b.example"]
 //! ```
 //!
 //! In the `conf` format a value with spaces must be quoted: an unquoted

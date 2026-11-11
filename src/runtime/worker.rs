@@ -47,6 +47,7 @@ use crate::{
 ///
 /// # #[cfg(feature = "sys")] {
 /// let system = System::builder("worker-doc")
+/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("worker-doc"))
 ///     .process_wide(false)
 ///     .single_instance(false)
 ///     .disable(Member::Log)

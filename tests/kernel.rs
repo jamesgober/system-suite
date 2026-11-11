@@ -145,7 +145,7 @@ fn test_subsystems_start_by_position_and_stop_in_reverse() {
         entries(&journal),
         ["start store", "start cache", "start jobs", "start door"]
     );
-    let report = system.health();
+    let report = system.kernel().health();
     let subsystems = report
         .components()
         .iter()
@@ -321,7 +321,8 @@ fn test_t7_reload_publishes_only_a_valid_accepted_configuration() {
     assert_eq!(applied.load(Ordering::SeqCst), 10);
     assert_eq!(reader.get().get_or("app.limit", 0_u32).unwrap(), 10);
 
-    // A secret reference is refused until the secrets feature (0.5).
+    // A reference to an unset variable is refused (and, without the
+    // secrets feature, any reference is).
     write_private(
         &file,
         "[app]\nlimit = 20\npassword = \"env:APP_PASSWORD\"\n",
@@ -340,7 +341,7 @@ fn test_t7_reload_publishes_only_a_valid_accepted_configuration() {
     assert_eq!(reader.version(), 2);
 
     // After a stop request, a reload is refused.
-    assert!(system.request_stop("test"));
+    assert!(system.kernel().request_stop("test"));
     assert_eq!(
         system.reload().err().map(|e| e.kind()),
         Some(ErrorKind::Stopping)
@@ -374,8 +375,8 @@ fn test_a_panicking_health_check_reports_unhealthy() {
         .register(PanickyHealth)
         .start()
         .unwrap();
-    assert_eq!(system.status(), Status::Unhealthy);
-    let report = system.health();
+    assert_eq!(system.kernel().status(), Status::Unhealthy);
+    let report = system.kernel().health();
     assert_eq!(report.status(), Status::Unhealthy);
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
@@ -570,7 +571,7 @@ fn test_a_stop_during_a_staged_boot_interrupts_it() {
     let mut boot = quiet("kernel-interrupt", &root).boot().unwrap();
     boot.start(Recorder::new("first", Position::FIRST, &journal))
         .unwrap();
-    assert!(boot.kernel().request_stop("operator"));
+    assert!(boot.foundation().kernel().request_stop("operator"));
     let error = boot
         .start(Recorder::new("second", Position::DEFAULT, &journal))
         .err()
@@ -622,7 +623,7 @@ fn test_the_urgent_line_reaches_subsystem_mailboxes() {
         thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(*seen.lock().unwrap(), Some(Level::Shed));
-    assert_eq!(system.health().urgent(), Level::Shed);
+    assert_eq!(system.kernel().health().urgent(), Level::Shed);
     assert_eq!(
         urgent.set(Level::Draining, "no").err().map(|e| e.kind()),
         Some(ErrorKind::UrgentRefused)
@@ -658,7 +659,7 @@ fn test_workers_restart_then_stop_at_shutdown() {
         thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(worker.restarts(), 2);
-    assert_eq!(system.status(), Status::Healthy);
+    assert_eq!(system.kernel().status(), Status::Healthy);
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
     assert_eq!(worker.state(), WorkerState::Stopped);
 }
@@ -672,9 +673,9 @@ fn test_a_critical_worker_that_gives_up_stops_the_system() {
         .critical(true)
         .spawn(system.runtime(), |_ctx| Err(Failure::new("lost the disk")))
         .unwrap();
-    let reason = system.wait_for_stop();
+    let reason = system.kernel().wait_for_stop();
     assert!(reason.to_string().contains("essential"), "{reason}");
-    assert_eq!(system.status(), Status::Unhealthy);
+    assert_eq!(system.kernel().status(), Status::Unhealthy);
     let code = system.shutdown();
     assert_ne!(code, ExitCode::SUCCESS);
 }
@@ -1053,6 +1054,30 @@ fn test_reloads_and_lockdowns_are_audited() {
 
 #[cfg(feature = "registry")]
 #[test]
+fn test_an_event_guard_removes_its_callback_unless_kept() {
+    use system_suite::kernel::Event;
+
+    let root = Root::new("guard");
+    let system = quiet("kernel-guard", &root).start().unwrap();
+    let events = system.events();
+    let dropped = events.register(|_event: &Event| {});
+    events.register(|_event: &Event| {}).keep();
+    assert_eq!(events.handler_count(), 2);
+    drop(dropped);
+    assert_eq!(events.handler_count(), 1);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[test]
+fn test_run_reports_a_failed_boot_with_its_exit_code() {
+    // The name is invalid, so the boot fails before anything starts and
+    // `run!` returns the report's code instead of parking.
+    let code = system_suite::run!("not a valid name");
+    assert_eq!(code, ExitCode::from(system_suite::exit::USAGE));
+}
+
+#[cfg(feature = "registry")]
+#[test]
 fn test_events_reach_handlers_and_a_panicking_handler_is_isolated() {
     use system_suite::kernel::Event;
 
@@ -1066,7 +1091,7 @@ fn test_events_reach_handlers_and_a_panicking_handler_is_isolated() {
         .unwrap();
     let seen: Arc<Mutex<Vec<String>>> = Arc::default();
     let sink = Arc::clone(&seen);
-    let _guard = system.events().register_guard(move |event: &Event| {
+    let _guard = system.events().register(move |event: &Event| {
         let line = match event {
             Event::Phase { to, .. } => format!("phase {to}"),
             Event::Reloaded { version } => format!("reloaded {version}"),
@@ -1083,7 +1108,7 @@ fn test_events_reach_handlers_and_a_panicking_handler_is_isolated() {
     });
     let _boom = system
         .events()
-        .register_guard(|_event: &Event| panic!("a handler that always panics"));
+        .register(|_event: &Event| panic!("a handler that always panics"));
 
     assert_eq!(system.reload().unwrap(), 2);
     write_private(&file, "[app\n");

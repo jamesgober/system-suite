@@ -58,7 +58,7 @@ Written at the `0.2.0` design lock. Steps arrive with the members that perform t
 | 2 | `Instance` | sys-lib, mod-rand | the instance (id, start time, host, pid, user) is created; with `rand` or `secrets` enabled, one read from the OS random source proves it works | `Entropy`: exit | 0.3 |
 | 3 | `Paths` | path-lib | the application's directories are resolved (scope from the builder or `<NAME>_PATH_SCOPE`, overrides from `<NAME>_<KIND>_DIR`); nothing is created | `Paths`: exit | 0.3 |
 | 4 | `Environment` | env-lib | the `.env` file in the configuration directory is checked (owner and permissions, as for the configuration file) and read, if present; the process environment is never changed | `Environment`, `ConfigInsecure`: exit | 0.3 |
-| 5 | `Configuration` | the configuration backend | the file is found (explicit path, `<NAME>_CONFIG`, the configuration directory, the working directory), opened, its owner and permissions checked on the opened file, parsed, and every suite section validated; a secret reference is refused until 0.5 | `ConfigNotFound`, `ConfigInsecure`, `ConfigInvalid`, `Secret`: exit | 0.4 |
+| 5 | `Configuration` | the configuration backend | the file is found (explicit path, `<NAME>_CONFIG`, the configuration directory, the working directory), opened, its owner and permissions checked on the opened file, parsed, and every suite section validated; secret references are resolved at step 8 | `ConfigNotFound`, `ConfigInsecure`, `ConfigInvalid`, `Secret`: exit | 0.4 |
 | 6 | `Guard` | sys-lib | single-instance lock in the runtime directory (or the configured one), pid file, umask `0o027`, open-file limit raised | `AlreadyRunning`, `LockDirInsecure`, `Limits`: exit, nothing created | 0.3 |
 | 7 | `Signals` | signal-mod | the kernel's signal intake is installed: stop, reload, and dump signals are recorded from here on and acted on at the next step boundary | `Signals`: exit | 0.3 |
 | 8 | `Secrets` | key-vault | secret references in the configuration (`vault:`, `env:`, `file:`) are resolved into the vault; plain-text secrets are refused unless allowed | `Secret`, `PlainSecret`: exit | 0.5 |
@@ -104,7 +104,7 @@ A stop signal received after step 7 is recorded. At the next step boundary the b
 
 ### The steps
 
-A stop is requested by a stop signal, `System::request_stop`, a critical worker that exhausted its restarts, or a supervisor (`Kernel::request_supervisor_stop`). The kernel then runs:
+A stop is requested by a stop signal, `Kernel::request_stop`, a critical worker that exhausted its restarts, or a supervisor (`Kernel::request_supervisor_stop`). The kernel then runs:
 
 | # | Step | What happens | Since |
 |---|---|---|---|
@@ -145,7 +145,7 @@ A stop is requested by a stop signal, `System::request_stop`, a critical worker 
 
 A reload (SIGHUP on Unix, `System::reload`, or a Windows service `PARAMCHANGE` once signal-mod supports it) does not change the lifecycle phase:
 
-1. the configuration file is read and validated as in boot step 5 (with `config_str`, the same text is read again); secret references are resolved as in step 8 (from 0.5; refused in 0.4);
+1. the configuration file is read and validated as in boot step 5 (with `config_str`, the same text is read again); secret references are resolved as in step 8;
 2. every subsystem prepares its change and returns a commit; nothing is applied yet;
 3. if every preparation succeeded, the new configuration snapshot is published (version + 1), the suite's own live settings change (in 0.4, the `[kernel]` deadlines), and every commit runs; otherwise nothing changes, the old configuration stays, and the refusal is logged and counted (threat T7).
 

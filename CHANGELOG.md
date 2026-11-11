@@ -11,6 +11,34 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-11
+
+The beta: the API simplified before 1.0. Each handle exists once, each task has one way to do it, the names are plain words, and a whole service is one line. Nothing about the boot, the shutdown, the configuration, or the defaults changed. Migration: [`docs/MIGRATION-0.9.md`](./docs/MIGRATION-0.9.md).
+
+### Added
+
+- `run!()` and `run!("name")`: boots with the defaults, runs until a stop, and returns the exit code, reporting a boot failure (`fn main() -> ExitCode { system_suite::run!() }`).
+- `EventGuard::keep`, for a callback that stays registered until the shutdown.
+- `docs/MIGRATION-0.9.md`. The README, `docs/API.md`, and the migration note run as doctests with every feature, so their examples cannot drift from the API.
+
+### Changed
+
+- `Error`'s `{:?}` is the block `Error::report` writes (what failed, at which step, and what to do), so `start!()?` in a `main` that returns `Result<ExitCode, Error>` prints a readable report. `{:#?}` shows the fields.
+- `System` dereferences to `Foundation`; its copies of the handle accessors are removed (`system.log()` and the rest still work, through `Deref`).
+- `System::phase`, `request_stop`, `health`, `status`, and `wait_for_stop` are removed: they were copies of the kernel's, now `system.kernel().request_stop(...)` and so on.
+- `Foundation::build` is `build_info`. `HealthReport::write_kv` is removed: it repeated `Display` (`report.to_string()`, `write!(out, "{report}")`).
+- `Link::kernel`, `Link::urgent`, `Boot::kernel`, and `Kernel::runtime` are removed: they were copies of `foundation().kernel()` and `Foundation::runtime`.
+- `StopReason::exit_code` returns an `ExitCode`, as `Error::exit_code` does. `request_supervisor_stop` and `StopReason::Supervisor` take and hold a `Cow<'static, str>`, as `request_stop` does; timer names are `impl Into<Cow<'static, str>>`, as worker names are.
+- `Builder::new` is private: `System::builder(name)` is the one way to get a builder.
+- `Events::register` returns an `EventGuard` (dropping it removes the callback); `register_guard`, `unregister`, and `EventId` are removed.
+- The exit code constants `DATAERR`, `CANTCREAT`, `IOERR`, `TEMPFAIL`, and `NOPERM` are `DATA_ERROR`, `CANNOT_CREATE`, `IO_ERROR`, `TEMPORARY_FAILURE`, and `NO_PERMISSION`, with the same values.
+- `docs/API.md` is rewritten as a task-oriented tour with runnable examples. The doctests that boot a system use a temporary root instead of the user's directories.
+
+### Fixed
+
+- Stale documentation: `ErrorKind::Secret`, `Builder::disable` (it listed five of the nine members that can be disabled), `System::run` (exit code 70), the `conf` list example in `config`, and the boot order's secret step. The error for a secret reference without the `secrets` feature no longer says to wait for it.
+
+
 ## [0.8.1] - 2026-11-08
 
 The second pre-1.0 pass: an independent security review of the whole
@@ -472,7 +500,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jamesgober/system-suite/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/jamesgober/system-suite/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/jamesgober/system-suite/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jamesgober/system-suite/compare/v0.7.0...v0.7.1

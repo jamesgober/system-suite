@@ -12,7 +12,7 @@ use std::{fmt, process::ExitCode, sync::Arc};
 ))]
 use crate::ErrorKind;
 #[cfg(feature = "kernel")]
-use crate::lifecycle::{Phase, StopReason};
+use crate::lifecycle::Phase;
 use crate::{Builder, Error, boot::Parts, logging::Val};
 
 /// The typed handles of every enabled member, built once at boot.
@@ -29,6 +29,7 @@ use crate::{Builder, Error, boot::Parts, logging::Val};
 ///
 /// # #[cfg(feature = "sys")] {
 /// let system = System::builder("foundation-doc")
+/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("foundation-doc"))
 ///     .process_wide(false)
 ///     .single_instance(false)
 ///     .disable(Member::Log)
@@ -90,7 +91,7 @@ impl Foundation {
     /// builder was not given it (D-038).
     #[cfg(feature = "sys")]
     #[must_use]
-    pub fn build(&self) -> Option<&'static sys_lib::BuildInfo> {
+    pub fn build_info(&self) -> Option<&'static sys_lib::BuildInfo> {
         self.shared.build
     }
 
@@ -256,7 +257,11 @@ pub struct System {
 }
 
 impl System {
-    /// A builder for the application `name` (same as [`Builder::new`]).
+    /// A builder for the application `name`: 1 to 64 ASCII letters,
+    /// digits, `-`, `_`, `.`, not starting with `.`. The name names the
+    /// directories, the lock, the configuration file (`<name>.conf`), the
+    /// environment prefix (`SITE_` for `site`), and the log target. The
+    /// one way to get a [`Builder`] (D-096).
     pub fn builder(name: &str) -> Builder {
         Builder::new(name)
     }
@@ -318,124 +323,6 @@ impl System {
         &self.foundation
     }
 
-    /// The application's name.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        self.foundation.name()
-    }
-
-    /// See [`Foundation::build`].
-    #[cfg(feature = "sys")]
-    #[must_use]
-    pub fn build(&self) -> Option<&'static sys_lib::BuildInfo> {
-        self.foundation.build()
-    }
-
-    /// See [`Foundation::instance`].
-    #[cfg(feature = "sys")]
-    #[must_use]
-    pub fn instance(&self) -> &'static sys_lib::Instance {
-        self.foundation.instance()
-    }
-
-    /// See [`Foundation::guard_report`].
-    #[cfg(feature = "sys")]
-    #[must_use]
-    pub fn guard_report(&self) -> &sys_lib::process::GuardReport {
-        self.foundation.guard_report()
-    }
-
-    /// See [`Foundation::paths`].
-    #[cfg(feature = "paths")]
-    #[must_use]
-    pub fn paths(&self) -> &path_lib::App {
-        self.foundation.paths()
-    }
-
-    /// See [`Foundation::env`].
-    #[cfg(feature = "env")]
-    #[must_use]
-    pub fn env(&self) -> &env_lib::Env {
-        self.foundation.env()
-    }
-
-    /// See [`Foundation::log`].
-    #[cfg(feature = "log")]
-    #[must_use]
-    pub fn log(&self) -> &log_io::Logger {
-        self.foundation.log()
-    }
-
-    /// See [`Foundation::clock`].
-    #[cfg(feature = "time")]
-    #[must_use]
-    pub fn clock(&self) -> &dyn clock_lib::Clock {
-        self.foundation.clock()
-    }
-
-    /// See [`Foundation::audit`].
-    #[cfg(feature = "audit")]
-    #[must_use]
-    pub fn audit(&self) -> &crate::AuditLog {
-        self.foundation.audit()
-    }
-
-    /// See [`Foundation::vault`].
-    #[cfg(feature = "secrets")]
-    #[must_use]
-    pub fn vault(&self) -> &key_vault::KeyVault {
-        self.foundation.vault()
-    }
-
-    /// See [`Foundation::events`].
-    #[cfg(feature = "registry")]
-    #[must_use]
-    pub fn events(&self) -> &crate::kernel::Events {
-        self.foundation.events()
-    }
-
-    /// See [`Foundation::ids`].
-    #[cfg(feature = "ids")]
-    #[must_use]
-    pub fn ids(&self) -> &id_forge::snowflake::Snowflake {
-        self.foundation.ids()
-    }
-
-    /// See [`Foundation::kernel`].
-    #[cfg(feature = "kernel")]
-    #[must_use]
-    pub fn kernel(&self) -> &crate::kernel::Kernel {
-        self.foundation.kernel()
-    }
-
-    /// See [`Foundation::config`].
-    #[cfg(feature = "config")]
-    #[must_use]
-    pub fn config(&self) -> crate::config::Config {
-        self.foundation.config()
-    }
-
-    /// See [`Foundation::config_snapshot`].
-    #[cfg(feature = "config")]
-    #[must_use]
-    pub fn config_snapshot(&self) -> &crate::SnapshotView<crate::config::Config> {
-        self.foundation.config_snapshot()
-    }
-
-    /// See [`Foundation::metrics`].
-    #[cfg(feature = "metrics")]
-    #[must_use]
-    pub fn metrics(&self) -> &metrics_lib::MetricsCore {
-        self.foundation.metrics()
-    }
-
-    /// See [`Foundation::runtime`].
-    #[cfg(feature = "kernel")]
-    #[must_use]
-    pub fn runtime(&self) -> &crate::runtime::Runtime {
-        self.foundation.runtime()
-    }
-
     /// How long each boot step took, in boot order: the steps that ran
     /// (a step whose feature is compiled out is absent). Also written to
     /// the log as one `boot step` line each.
@@ -446,6 +333,7 @@ impl System {
     /// use system_suite::{Member, Step, System};
     ///
     /// let builder = System::builder("timeline-doc")
+    /// #     .portable(std::env::temp_dir().join("system-suite-doc").join("timeline-doc"))
     ///     .process_wide(false)
     ///     .disable(Member::Log);
     /// # #[cfg(feature = "sys")]
@@ -459,21 +347,6 @@ impl System {
     #[must_use]
     pub fn boot_timeline(&self) -> &[(crate::Step, std::time::Duration)] {
         self.parts.timeline()
-    }
-
-    /// The current lifecycle phase.
-    #[cfg(feature = "kernel")]
-    #[must_use]
-    pub fn phase(&self) -> Phase {
-        self.foundation.kernel().phase()
-    }
-
-    /// Asks for a clean stop exactly as a SIGTERM would. Returns `false` if
-    /// a stop was already requested (the first reason is kept). Never
-    /// blocks.
-    #[cfg(feature = "kernel")]
-    pub fn request_stop(&self, reason: impl Into<std::borrow::Cow<'static, str>>) -> bool {
-        self.foundation.kernel().request_stop(reason)
     }
 
     /// Reads the configuration again, validates it, and asks every
@@ -502,25 +375,11 @@ impl System {
         }
     }
 
-    /// Every member, subsystem, worker, and the timer thread. Allocates;
-    /// for health endpoints and the dump signal.
-    #[cfg(feature = "kernel")]
-    #[must_use]
-    pub fn health(&self) -> crate::kernel::HealthReport {
-        self.foundation.kernel().health()
-    }
-
-    /// The aggregate status only. Does not allocate.
-    #[cfg(feature = "kernel")]
-    #[must_use]
-    pub fn status(&self) -> crate::kernel::Status {
-        self.foundation.kernel().status()
-    }
-
     /// Parks the calling thread with zero CPU until a stop is requested (a
     /// stop signal, a console event, or `Kernel::request_stop`), then runs
     /// the shutdown order and returns the exit code: `0` for a clean stop,
-    /// `79` if a step missed the shutdown deadline.
+    /// `70` when a critical worker exhausted its restarts, `79` if a step
+    /// missed the shutdown deadline.
     #[cfg(feature = "kernel")]
     pub fn run(self) -> ExitCode {
         #[cfg(all(windows, feature = "signals"))]
@@ -530,9 +389,9 @@ impl System {
         };
         #[cfg(not(all(windows, feature = "signals")))]
         let system = self;
-        let reason = system.wait_for_stop();
+        let reason = system.foundation.kernel().wait_for_stop();
         let cause = reason.to_string();
-        system.finish(reason.exit_code(), &cause)
+        system.finish(reason.exit_value(), &cause)
     }
 
     /// On Windows, offers the main thread to the service control manager
@@ -568,9 +427,9 @@ impl System {
                 return u32::from(crate::exit::SOFTWARE);
             };
             let _reported = status.running();
-            let reason = system.wait_for_stop();
+            let reason = system.foundation.kernel().wait_for_stop();
             let _reported = status.stopping(system.parts.shutdown_budget());
-            let code = system.finish_code(reason.exit_code(), &reason.to_string());
+            let code = system.finish_code(reason.exit_value(), &reason.to_string());
             service_exit.store(code, Ordering::Release);
             u32::from(code)
         });
@@ -581,22 +440,12 @@ impl System {
         }
     }
 
-    /// Parks the calling thread until a stop is requested and returns why.
-    /// Several threads may wait. A framework that has work to do between
-    /// the stop request and the shutdown calls this, then
-    /// [`shutdown`](Self::shutdown).
-    #[cfg(feature = "kernel")]
-    #[must_use = "the stop reason says why the system is stopping"]
-    pub fn wait_for_stop(&self) -> StopReason {
-        self.foundation.kernel().wait_for_stop()
-    }
-
     /// Runs the shutdown order now, whether or not a stop was requested,
     /// and returns the exit code.
     pub fn shutdown(self) -> ExitCode {
         #[cfg(feature = "kernel")]
         let (code, cause) = match self.foundation.kernel().stop_reason() {
-            Some(reason) => (reason.exit_code(), reason.to_string()),
+            Some(reason) => (reason.exit_value(), reason.to_string()),
             None => (crate::exit::OK, "shutdown called".to_owned()),
         };
         #[cfg(not(feature = "kernel"))]
@@ -622,6 +471,17 @@ impl Drop for System {
                 .parts
                 .teardown(crate::exit::OK, "the System was dropped");
         }
+    }
+}
+
+/// A running system is its [`Foundation`] plus the lifecycle: every typed
+/// handle (`system.log()`, `system.config()`, `system.kernel()`, ...) is
+/// the foundation's, reached through this, so each exists once (D-096).
+impl std::ops::Deref for System {
+    type Target = Foundation;
+
+    fn deref(&self) -> &Foundation {
+        &self.foundation
     }
 }
 
@@ -791,7 +651,7 @@ fn write_dump(foundation: &Foundation) {
         let instance = String::from("unknown");
         let mut health = String::new();
         // Writing into a String cannot fail.
-        let _written = report.write_kv(&mut health);
+        let _written = report.write_text(&mut health);
         log_io::info!(
             foundation.log(),
             "state",
@@ -887,7 +747,7 @@ mod tests {
         if let Ok(system) = system {
             assert_eq!(system.name(), "system-unit");
             #[cfg(feature = "kernel")]
-            assert_eq!(system.phase(), Phase::Ready);
+            assert_eq!(system.kernel().phase(), Phase::Ready);
             assert_eq!(system.shutdown(), ExitCode::SUCCESS);
         }
     }

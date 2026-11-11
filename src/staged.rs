@@ -11,7 +11,7 @@ use crate::{
     Error, ErrorKind, Foundation, Step, System,
     boot::Parts,
     builder::{OnReady, validate_name},
-    kernel::{Kernel, Slot},
+    kernel::Slot,
     lifecycle::{Link, Mailbox, Subsystem},
     logging::Val,
 };
@@ -53,6 +53,7 @@ use crate::{
 /// }
 ///
 /// let builder = System::builder("boot-doc")
+/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("boot-doc"))
 ///     .process_wide(false)
 ///     .disable(Member::Log);
 /// # #[cfg(feature = "sys")]
@@ -91,12 +92,6 @@ impl Boot {
     #[must_use]
     pub fn foundation(&self) -> &Foundation {
         &self.foundation
-    }
-
-    /// The kernel's control handle.
-    #[must_use]
-    pub fn kernel(&self) -> &Kernel {
-        self.foundation.kernel()
     }
 
     /// Starts `subsystem` now, on the calling thread, and appends it to the

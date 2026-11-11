@@ -150,11 +150,12 @@ pub struct ComponentHealth {
 ///
 /// # #[cfg(feature = "sys")] {
 /// let system = System::builder("health-doc")
+/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("health-doc"))
 ///     .process_wide(false)
 ///     .single_instance(false)
 ///     .disable(Member::Log)
 ///     .start()?;
-/// let report = system.health();
+/// let report = system.kernel().health();
 /// assert!(report.ready());
 /// let mut json = String::new();
 /// report.write_json(&mut json).ok();
@@ -242,13 +243,8 @@ impl HealthReport {
         out.write_str("]}")
     }
 
-    /// The report as `key=value` lines: one for the system, one per
-    /// component.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error `out` returns.
-    pub fn write_kv(&self, out: &mut impl fmt::Write) -> fmt::Result {
+    /// The report as `key=value` lines, for `Display`.
+    pub(crate) fn write_text(&self, out: &mut impl fmt::Write) -> fmt::Result {
         writeln!(
             out,
             "health.status={} health.phase={} health.urgent={}",
@@ -271,9 +267,13 @@ impl HealthReport {
     }
 }
 
+/// The report as `key=value` lines: one for the system, one per component
+/// (`health.status=healthy health.phase=ready health.urgent=normal`, then
+/// `health.subsystem.db=degraded reason="slow"`). `write!(out, "{report}")`
+/// writes it into any `fmt::Write` without an extra copy.
 impl fmt::Display for HealthReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.write_kv(f)
+        self.write_text(f)
     }
 }
 
@@ -350,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_kv_has_one_line_per_component() {
+    fn test_write_text_has_one_line_per_component() {
         let r = report(vec![
             component("a", Health::HEALTHY),
             component("b", Health::degraded("slow")),

@@ -38,7 +38,7 @@ pub(crate) mod signals;
 mod urgent;
 
 #[cfg(feature = "registry")]
-pub use events::{Event, EventGuard, EventId, Events};
+pub use events::{Event, EventGuard, Events};
 pub use health::{Component, ComponentHealth, Health, HealthReport, Status};
 #[cfg(feature = "audit")]
 pub(crate) use urgent::cap_reason;
@@ -58,6 +58,7 @@ pub use urgent::{Level, Notice, UrgentLine, Watch};
 ///
 /// # #[cfg(feature = "sys")] {
 /// let system = System::builder("kernel-doc")
+/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("kernel-doc"))
 ///     .process_wide(false)
 ///     .single_instance(false)
 ///     .disable(Member::Log)
@@ -66,7 +67,7 @@ pub use urgent::{Level, Notice, UrgentLine, Watch};
 /// std::thread::spawn(move || {
 ///     kernel.request_stop("done");
 /// });
-/// assert_eq!(system.wait_for_stop(), StopReason::Requested { reason: "done".into() });
+/// assert_eq!(system.kernel().wait_for_stop(), StopReason::Requested { reason: "done".into() });
 /// let code = system.shutdown();
 /// # let _ = code;
 /// # }
@@ -203,9 +204,12 @@ impl Kernel {
     /// watchdog, an orchestrator, a tower command): the stop reason is
     /// [`StopReason::Supervisor`], so the log and the exit say who asked.
     /// Returns `false` if a stop was already requested.
-    pub fn request_supervisor_stop(&self, reason: impl Into<String>) -> bool {
+    pub fn request_supervisor_stop(
+        &self,
+        reason: impl Into<std::borrow::Cow<'static, str>>,
+    ) -> bool {
         self.stop_for(StopReason::Supervisor {
-            reason: urgent::cap_reason(reason.into().into()).into_owned(),
+            reason: urgent::cap_reason(reason.into()),
         })
     }
 
@@ -264,14 +268,17 @@ impl Kernel {
         &self.control.urgent
     }
 
-    /// The runtime: supervised workers and timers.
+    /// The runtime: supervised workers and timers (public as
+    /// `Foundation::runtime`).
     #[must_use]
-    pub fn runtime(&self) -> &Runtime {
+    pub(crate) fn runtime(&self) -> &Runtime {
         &self.control.runtime
     }
 
     /// Every member, subsystem, worker, and the timer thread. Allocates;
-    /// for health endpoints and the dump signal.
+    /// for health endpoints and the dump signal. A member is listed as
+    /// healthy once it started: members have no health check of their own,
+    /// and one that fails stops the boot or reports through the kernel.
     #[must_use]
     pub fn health(&self) -> HealthReport {
         let mut components = Vec::new();
@@ -462,7 +469,7 @@ impl Kernel {
                 crate::runtime::Event::TimerPanicked { name } => {
                     log.error(
                         "timer panicked and was cancelled",
-                        &[("timer", Val::Str(name))],
+                        &[("timer", Val::Str(&name))],
                     );
                 }
             }));
@@ -614,7 +621,7 @@ mod tests {
         assert_eq!(
             supervised.stop_reason(),
             Some(StopReason::Supervisor {
-                reason: "tower: rolling restart".to_owned()
+                reason: "tower: rolling restart".into()
             })
         );
     }

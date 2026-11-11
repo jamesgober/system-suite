@@ -11,7 +11,7 @@ use std::{
 use super::Deadline;
 use crate::{
     Foundation,
-    kernel::{Health, Kernel, Notice, UrgentLine},
+    kernel::{Health, Notice},
 };
 
 /// A part of the application that the kernel starts after the members and
@@ -174,22 +174,11 @@ impl Link {
         &self.inner.name
     }
 
-    /// The typed handles of every enabled member.
+    /// The typed handles of every enabled member, the kernel among them
+    /// (`link.foundation().kernel().urgent()` for the urgent line).
     #[must_use]
     pub fn foundation(&self) -> &Foundation {
         &self.inner.foundation
-    }
-
-    /// The kernel's control handle.
-    #[must_use]
-    pub fn kernel(&self) -> &Kernel {
-        self.inner.foundation.kernel()
-    }
-
-    /// The urgent line (tier T0).
-    #[must_use]
-    pub fn urgent(&self) -> &UrgentLine {
-        self.kernel().urgent()
     }
 
     /// This subsystem's mailbox (tier T1): every urgent change is posted
@@ -203,7 +192,9 @@ impl Link {
     /// logged at error level with the subsystem's name, and counted
     /// (`system_suite_subsystem_errors_total{subsystem}`).
     pub fn report_error(&self, error: &(dyn StdError + 'static)) {
-        self.kernel()
+        self.inner
+            .foundation
+            .kernel()
             .report_subsystem_error(&self.inner.name, error);
     }
 }
