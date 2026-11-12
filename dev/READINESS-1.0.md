@@ -18,7 +18,7 @@ For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass
 
 | Item | Why it is open | What closes it |
 |---|---|---|
-| Two real consumers (0.8's exit) | WASP's gateway boots on the suite; Hive DB does not yet | a Hive DB start-up adopting it, and both run on every listed environment |
+| Two real consumers (0.8's exit) | one gateway boots on the suite; a database does not yet | a database start-up adopting it, and both run on every listed environment |
 | The API review against real use | the review so far was against the consumers' specification | the same consumers; changes then, not after 1.0 |
 | Additive API a consumer may need (D-087) | designing it without a caller risks the wrong shape | a consumer asking: `Kernel::reload`, a dump from the kernel, a per-request deadline, error hooks on workers, subsystem restart, a lock beside the data directory |
 | `config-xml`, `config-validation` | they need XML or regex, and no first-party crate covers those yet | first-party XML and regex crates |

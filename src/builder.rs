@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_validate_name_accepts_the_documented_set() {
-        for name in ["site", "hive-db", "a_b.c", "x", &"a".repeat(64)] {
+        for name in ["site", "my-app", "a_b.c", "x", &"a".repeat(64)] {
             assert!(validate_name(name, "application").is_ok(), "{name}");
         }
     }

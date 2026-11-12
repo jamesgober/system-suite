@@ -818,8 +818,8 @@ fn step_instance(parts: &mut Parts) -> Result<(), Error> {
 }
 
 /// The prefix of the application's environment variables: the name in
-/// upper case, every other character an underscore (`hive-db` gives
-/// `HIVE_DB`). A leading digit gets an underscore in front.
+/// upper case, every other character an underscore (`my-app` gives
+/// `MY_APP`). A leading digit gets an underscore in front.
 #[cfg(feature = "paths")]
 pub(crate) fn env_prefix(name: &str) -> String {
     let mut prefix: String = name
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn test_env_prefix_upper_cases_and_replaces() {
         assert_eq!(env_prefix("site"), "SITE");
-        assert_eq!(env_prefix("hive-db.v2"), "HIVE_DB_V2");
+        assert_eq!(env_prefix("my-app.v2"), "MY_APP_V2");
         assert_eq!(env_prefix("9lives"), "_9LIVES");
     }
 

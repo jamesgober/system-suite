@@ -160,7 +160,7 @@ fn main() -> std::process::ExitCode {
 }
 ```
 
-`run!()` names the application after its package (`run!("hive")` names it
+`run!()` names the application after its package (`run!("myapp")` names it
 explicitly), boots every enabled member and the kernel in the boot order,
 parks the main thread with zero CPU until a stop (SIGTERM, SIGINT, Ctrl+C,
 a console close, a Windows service stop, or `Kernel::request_stop`), stops
@@ -206,7 +206,7 @@ failure, which is what supervisors and scripts read; to keep it with
 
 ```rust,no_run
 fn main() -> std::process::ExitCode {
-    let system = match system_suite::start!("hive") {
+    let system = match system_suite::start!("myapp") {
         Ok(system) => system,
         Err(error) => return error.report(),
     };

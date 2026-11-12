@@ -146,7 +146,7 @@ and boot and stop profiled step by step on Windows.
 
 The alpha: the API reviewed against the planned consumers, JSON through
 James's own jsonx-lib, and the first pre-1.0 pass over the suite and the
-members released for it. API review against the planned consumers (WASP's boot, Hive DB start-ups):
+members released for it. API review against the planned consumers (a platform boot, database start-ups):
 the breaking changes are made before 1.0.
 
 ### Changed (breaking)
