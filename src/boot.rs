@@ -961,9 +961,15 @@ fn step_configuration(parts: &mut Parts) -> Result<(), Error> {
             // `<NAME>_CONFIG=` as in the process environment, or plain
             // `CONFIG=`; the prefixed form wins when both are there (D-100).
             .and_then(|env| {
-                env.get(&format!("{prefix}_CONFIG"))
-                    .or_else(|| env.get("CONFIG"))
-                    .map(|value| value.into_owned())
+                // The file's own keys, as written: env-lib's `get` strips
+                // its prefix from a name, so it cannot tell them apart.
+                let prefixed = format!("{prefix}_CONFIG");
+                let value_of = |name: &str| {
+                    env.iter()
+                        .find(|(key, _)| *key == name)
+                        .map(|(_, value)| value.to_owned())
+                };
+                value_of(&prefixed).or_else(|| value_of("CONFIG"))
             })
     } else {
         None

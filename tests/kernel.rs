@@ -1266,6 +1266,36 @@ fn test_t2_references_resolve_from_env_file_and_vault() {
 
 #[cfg(feature = "secrets")]
 #[test]
+fn test_t2_two_secrets_read_together() {
+    // D-100: a database login reads the user inside the password's read.
+    // key-vault 1.1 panicked here ("RefCell already borrowed"); 1.2 is
+    // required.
+    let root = Root::new("nested");
+    let user_file = root.path().join("db.user");
+    write_private(&user_file, "app");
+    let pass_file = root.path().join("db.pass");
+    write_private(&pass_file, "hunter2");
+    let config = format!(
+        "[db]\nuser = \"file:{}\"\npassword = \"file:{}\"\n",
+        user_file.display().to_string().replace('\\', "/"),
+        pass_file.display().to_string().replace('\\', "/")
+    );
+    let system = quiet("kernel-nested", &root)
+        .config_str(&config)
+        .start()
+        .unwrap();
+    let user = system.config().secret("db.user").unwrap();
+    let pass = system.config().secret("db.password").unwrap();
+    let total = user
+        .with(|u| pass.with(|p| u.len() + p.len()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(total, 10);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "secrets")]
+#[test]
 fn test_t2_unresolvable_references_name_the_key_never_a_value() {
     let root = Root::new("badrefs");
     let cases = [
