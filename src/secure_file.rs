@@ -283,7 +283,7 @@ pub(crate) fn read_env_file(path: &Path) -> Result<String, Error> {
 /// Makes `dir` owner-only on Windows for a unit test (the current user,
 /// SYSTEM, and Administrators, nothing inherited): a machine's temporary
 /// folder can grant other accounts write access, which the checks refuse.
-#[cfg(all(test, windows))]
+#[cfg(all(test, windows, feature = "config"))]
 pub(crate) fn make_private_for_tests(dir: &Path) {
     let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
         (Ok(domain), Ok(user)) => format!("{domain}\\{user}"),
@@ -309,5 +309,5 @@ pub(crate) fn make_private_for_tests(dir: &Path) {
     );
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(all(test, not(windows), feature = "config"))]
 pub(crate) fn make_private_for_tests(_dir: &Path) {}
