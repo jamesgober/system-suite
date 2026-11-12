@@ -270,7 +270,7 @@ pub mod build {
 /// ```no_run
 /// # #[cfg(feature = "kernel")]
 /// fn main() -> std::process::ExitCode {
-///     let system = match system_suite::start!("hive") {
+///     let system = match system_suite::start!("myapp") {
 ///         Ok(system) => system,
 ///         Err(error) => return error.report(),
 ///     };

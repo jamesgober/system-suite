@@ -143,12 +143,12 @@ A key whose last segment is, or ends with `_` and, one of `password`, `passwd`, 
 | `<NAME>_<KIND>_DIR` | an absolute directory for `DATA`, `CONFIG`, `CACHE`, `LOGS`, `STATE`, `RUNTIME`, `TEMP`, `DOCUMENTS` |
 | `NOTIFY_SOCKET`, `WATCHDOG_USEC`, `WATCHDOG_PID` | set by systemd |
 
-`<NAME>` is the application name in upper case with every other character an underscore (`hive-db` gives `HIVE_DB`). There are no implicit environment overrides of individual keys; a value that must come from the environment says so with an `env:` reference.
+`<NAME>` is the application name in upper case with every other character an underscore (`my-app` gives `MY_APP`). There are no implicit environment overrides of individual keys; a value that must come from the environment says so with an `env:` reference.
 
 ## Example
 
 ```ini
-# /etc/hive/hive.conf (chmod 640)
+# /etc/myapp/myapp.conf (chmod 640)
 [log]
 level = "info"
 redact = ["session_id"]
@@ -163,6 +163,6 @@ worker = 3
 sync = "every"
 
 [database]
-url = "postgres://db.internal/hive"
+url = "postgres://db.internal/myapp"
 password = "file:/run/secrets/db_password"
 ```
