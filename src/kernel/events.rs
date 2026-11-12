@@ -31,7 +31,7 @@ impl EventGuard {
     /// # Examples
     ///
     /// ```
-    /// # #[cfg(feature = "registry")] {
+    /// # #[cfg(all(feature = "registry", feature = "sys"))] {
     /// use system_suite::{Member, System};
     ///
     /// let system = System::builder("keep-doc")
