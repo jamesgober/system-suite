@@ -57,11 +57,13 @@ pub use urgent::{Level, Notice, UrgentLine, Watch};
 /// use system_suite::{Member, System, lifecycle::StopReason};
 ///
 /// # #[cfg(feature = "sys")] {
-/// let system = System::builder("kernel-doc")
+/// let builder = System::builder("kernel-doc")
 ///     .process_wide(false)
 ///     .single_instance(false)
-///     .disable(Member::Log)
-///     .start()?;
+///     .disable(Member::Log);
+/// # #[cfg(feature = "paths")]
+/// # let builder = builder.portable(std::env::temp_dir().join("system-suite-doc").join("kernel-doc"));
+/// let system = builder.start()?;
 /// let kernel = system.kernel().clone();
 /// std::thread::spawn(move || {
 ///     kernel.request_stop("done");

@@ -143,7 +143,7 @@ fn main() -> Result<std::process::ExitCode, system_suite::Error> {
 
 | system-suite | sys-lib | path-lib | env-lib | config-lib | log-io | metrics-lib | signal-mod | clock-lib | id-forge | audit-trail | registry-io | global-lib | mod-rand | key-vault |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0.9.1 | 0.5 | 1.2 | 1.0 | 1.4 | 2.2 | 2.2 | 2.2.1 | 1.1 | 1.0 | 1.2 | 1.2 | 1.0 | 1.0 | 1.2 |
+| 0.9.1 | 0.5 | 1.3 | 1.0 | 1.4 | 2.2 | 2.2 | 2.2.1 | 1.1 | 1.0 | 1.2 | 1.2 | 1.0 | 1.0 | 1.2 |
 
 Each is the lowest version the suite accepts; Cargo picks the newest compatible release.
 
