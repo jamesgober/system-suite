@@ -148,8 +148,15 @@ impl AuditLog {
                 .member_of(Member::Audit));
             }
             Ok(_) => {
-                let existing = File::open(path).map_err(|e| cannot_open(&e))?;
-                crate::secure_file::check_open(&existing, path, "audit chain")?;
+                // Checked on its own handle; audit-trail opens it again and
+                // checks its own descriptor too (D-101).
+                use crate::secure_file::{Others, Refusal, open_trusted, refused};
+                let _checked =
+                    open_trusted(path, Others::MayRead).map_err(|refusal| match refusal {
+                        Refusal::Refused(reason) => refused(path, "audit chain", reason),
+                        Refusal::NotFound => cannot_open(&std::io::ErrorKind::NotFound.into()),
+                        Refusal::Io(detail) => cannot_open(&std::io::Error::other(detail)),
+                    })?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(cannot_open(&e)),

@@ -515,6 +515,42 @@ fn test_a_configuration_file_others_can_change_is_refused_on_windows() {
     assert!(!error.to_string().contains("limit"), "{error}");
 }
 
+#[cfg(unix)]
+#[test]
+fn test_files_reached_through_links_are_checked_and_read() {
+    // D-104: Kubernetes mounts a config map or a secret as links into a
+    // hidden directory; the file at the end of the link is checked and read.
+    let root = Root::new("k8slinks");
+    let data = root.path().join("..data");
+    fs::create_dir_all(&data).unwrap();
+    write_private(&data.join("app.conf"), "[app]\nlimit = 7\n");
+    let config = root.path().join("app-link.conf");
+    std::os::unix::fs::symlink(data.join("app.conf"), &config).unwrap();
+    let system = quiet("kernel-k8slinks", &root)
+        .config_file(&config)
+        .start()
+        .unwrap();
+    assert_eq!(system.config().get::<i64>("app.limit").unwrap(), Some(7));
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(all(unix, feature = "secrets"))]
+#[test]
+fn test_a_secret_reached_through_a_link_is_read() {
+    let root = Root::new("k8ssecret");
+    let data = root.path().join("..data");
+    fs::create_dir_all(&data).unwrap();
+    write_private(&data.join("db_password"), "hunter2\n");
+    let link = root.path().join("db_password");
+    std::os::unix::fs::symlink(data.join("db_password"), &link).unwrap();
+    let system = quiet("kernel-k8ssecret", &root)
+        .config_str(format!("[db]\npassword = \"file:{}\"\n", link.display()))
+        .start()
+        .unwrap();
+    assert_eq!(secret_text(&system, "db.password"), "hunter2");
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
 #[cfg(windows)]
 #[test]
 fn test_a_configuration_file_others_can_only_read_is_accepted_on_windows() {
@@ -1432,7 +1468,7 @@ fn test_t2_a_secret_file_others_can_read_is_refused_on_windows() {
         .unwrap();
     assert_eq!(error.kind(), ErrorKind::Secret, "{error}");
     assert!(
-        error.to_string().contains("read by other accounts"),
+        error.to_string().contains("other accounts can read it"),
         "{error}"
     );
     assert!(!format!("{error:?}").contains("hunter2"));

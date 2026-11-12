@@ -431,18 +431,30 @@ fn from_file(path: &str, file: &Path) -> Result<RawKey, Error> {
             "point it at a regular file that holds the secret",
         ));
     }
-    let opened = fs::File::open(file).map_err(|e| {
-        secret_error(
+    use crate::secure_file::{FIX_SECRET, Others, Refusal, open_trusted};
+    let opened = open_trusted(file, Others::NoAccess).map_err(|refusal| match refusal {
+        Refusal::Refused(reason) => secret_error(
             path,
             &format!(
-                "names the file {}, which cannot be opened ({})",
-                file.display(),
-                e.kind()
+                "names the file {}, which is refused: {reason}",
+                file.display()
+            ),
+            FIX_SECRET,
+        ),
+        Refusal::NotFound => secret_error(
+            path,
+            &format!("names the file {}, which does not exist", file.display()),
+            "check that the file exists and that the service's user can read it",
+        ),
+        Refusal::Io(detail) => secret_error(
+            path,
+            &format!(
+                "names the file {}, which cannot be opened ({detail})",
+                file.display()
             ),
             "check that the file exists and that the service's user can read it",
-        )
+        ),
     })?;
-    crate::secure_file::check_secret_open(&opened, file, path)?;
     // Sized up front (within the limit), so growing the buffer leaves no
     // partial copies of the secret in freed memory.
     let size = opened

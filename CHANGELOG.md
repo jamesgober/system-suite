@@ -11,6 +11,22 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-12
+
+Every file the suite trusts is opened through path-lib's checked open (D-104).
+
+### Security
+
+- The configuration, `.env`, `file:` secret, and audit-chain files are opened through path-lib 1.3's `open_checked` on every OS: the owner and permissions are read from the opened handle, and the open does not block, so a FIFO swapped in after the regular-file check is refused instead of hanging the boot. The owner check no longer needs the `sys` feature.
+- A system-wide `.env` file (`Scope::Global`) must not be readable by other accounts, since it can hold the values of `env:` secrets; elsewhere it may be readable, as before.
+
+### Changed
+
+- A refused file's message is path-lib's reason (`the configuration file ... is refused: its group or other users can write to it; ...`), and the action names the `chmod`/`chown` or `icacls` fix.
+- A configuration or secret file reached through a link is followed to the file it names, which is the file checked (Kubernetes config-map and secret mounts).
+- env-lib 1.1 and clock-lib 1.2 are required.
+
+
 ## [0.9.1] - 2026-11-12
 
 The members' review releases adopted: path-lib 1.3, signal-mod 2.2.1, log-io 2.2, metrics-lib 2.2, config-lib 1.4, and registry-io 1.2 (D-102, D-103).
@@ -539,7 +555,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/jamesgober/system-suite/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/jamesgober/system-suite/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/jamesgober/system-suite/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/jamesgober/system-suite/compare/v0.8.0...v0.8.1

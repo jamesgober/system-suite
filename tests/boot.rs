@@ -1039,10 +1039,7 @@ fn test_t4_a_planted_env_file_cannot_redirect_the_configuration_on_windows() {
     let output = scenario.run("boot");
     assert!(!output.status.success(), "{}", text(&output.stderr));
     let stderr = text(&output.stderr);
-    assert!(
-        stderr.contains("can be changed by other accounts"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("other accounts can change it"), "{stderr}");
     assert!(!stderr.contains("planted.conf"), "{stderr}");
 }
 
