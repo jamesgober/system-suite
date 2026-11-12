@@ -11,6 +11,23 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-12
+
+The members' review releases adopted: signal-mod 2.2, log-io 2.2, metrics-lib 2.2, config-lib 1.4, and registry-io 1.2 (D-102).
+
+### Changed
+
+- The stop set is signal-mod's `SignalSet::stop()`: SIGTERM and SIGINT, plus Ctrl+Break on Windows. SIGQUIT is no longer caught, so it quits with a core dump as the OS intends; SIGTERM is the graceful stop. A stop signal ignored before boot (SIGHUP under `nohup`, SIGINT for a background job) stays ignored.
+- Windows: a logoff is declined by signal-mod and never reaches the kernel, and a machine shutdown arrives as a stop (`Terminate`). The handler thread signal-mod 2.1 parked at each logoff is gone.
+- log-io 2.2: a log file that is a symbolic link is refused (the logging step fails with its action), and new files are `0600` on Unix.
+- config-lib 1.4, for configuration files: in CONF a `#` starts a comment only at the start of a value or after whitespace (`password = abc#def` keeps `abc#def`), text after a value on its line is refused, and `nan` and `inf` stay strings; parse errors never quote the input.
+- metrics-lib 2.2: one metric family holds at most 5000 series by default.
+
+### Added
+
+- `[metrics] max_family_series` (default `5000`): the series one metric family may hold, so one family with request-chosen labels cannot take every slot.
+
+
 ## [0.9.0] - 2026-11-12
 
 The beta: the API simplified before 1.0. Each handle exists once, each task has one way to do it, the names are plain words, and a whole service is one line. Nothing about the boot, the shutdown, the configuration, or the defaults changed. Migration: [`docs/MIGRATION-0.9.md`](./docs/MIGRATION-0.9.md).
@@ -516,7 +533,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/jamesgober/system-suite/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/jamesgober/system-suite/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/jamesgober/system-suite/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/jamesgober/system-suite/compare/v0.7.1...v0.8.0

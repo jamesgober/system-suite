@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: beta (<code>0.9.0</code>).</strong> The API was simplified for 1.0 in 0.9.0 (<a href="./docs/MIGRATION-0.9.md">migration from 0.8</a>); 0.9.x changes it only to fix it. Boot in well under a millisecond, stop in about 0.2 ms, under 100 KiB of heap, no idle CPU (<a href="./docs/PERFORMANCE.md">measured</a>). A service boots with one line, reads its configuration (secrets as references resolved into a page-locked vault; reloaded all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, keeps a tamper-evident audit chain, reports health, and stops in order on a signal or a Windows service stop within a deadline. Every threat has a passing attack test, and each defence states its cost (<a href="./docs/SECURITY.md">security</a>). The API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: beta (<code>0.9.1</code>).</strong> The API was simplified for 1.0 in 0.9.0 (<a href="./docs/MIGRATION-0.9.md">migration from 0.8</a>); 0.9.x changes it only to fix it. Boot in well under a millisecond, stop in about 0.2 ms, under 100 KiB of heap, no idle CPU (<a href="./docs/PERFORMANCE.md">measured</a>). A service boots with one line, reads its configuration (secrets as references resolved into a page-locked vault; reloaded all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, keeps a tamper-evident audit chain, reports health, and stops in order on a signal or a Windows service stop within a deadline. Every threat has a passing attack test, and each defence states its cost (<a href="./docs/SECURITY.md">security</a>). The API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -143,7 +143,7 @@ fn main() -> Result<std::process::ExitCode, system_suite::Error> {
 
 | system-suite | sys-lib | path-lib | env-lib | config-lib | log-io | metrics-lib | signal-mod | clock-lib | id-forge | audit-trail | registry-io | global-lib | mod-rand | key-vault |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0.9.0 | 0.5 | 1.2 | 1.0 | 1.3 | 2.1 | 2.1.1 | 2.1.1 | 1.1 | 1.0 | 1.2 | 1.1 | 1.0 | 1.0 | 1.2 |
+| 0.9.1 | 0.5 | 1.2 | 1.0 | 1.4 | 2.2 | 2.2 | 2.2 | 1.1 | 1.0 | 1.2 | 1.2 | 1.0 | 1.0 | 1.2 |
 
 Each is the lowest version the suite accepts; Cargo picks the newest compatible release.
 

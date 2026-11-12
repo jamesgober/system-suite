@@ -77,6 +77,7 @@ Takes effect at restart.
 |---|---|---|---|
 | `enabled` | bool | `true` | create the registry (off: a registry nothing exports) |
 | `max_series` | integer | `10000` | the cardinality cap (1 to 10 000 000) |
+| `max_family_series` | integer | `5000` | the series one metric family may hold (1 to 10 000 000), so one family with request-chosen labels cannot fill the cap; a series past it goes to the overflow sink until one is removed (since 0.9.1) |
 
 Takes effect at restart.
 

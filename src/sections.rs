@@ -82,6 +82,10 @@ pub(crate) struct Crash {
 pub(crate) struct Metrics {
     pub(crate) enabled: bool,
     pub(crate) max_series: usize,
+    /// The series one metric family may hold (metrics-lib 2.2's family
+    /// cap), so one family with request-chosen labels cannot take every
+    /// slot (D-102).
+    pub(crate) max_family_series: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +147,7 @@ impl Default for Sections {
             metrics: Metrics {
                 enabled: true,
                 max_series: 10_000,
+                max_family_series: 5_000,
             },
             kernel: Kernel {
                 shutdown_deadline: None,

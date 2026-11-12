@@ -180,7 +180,10 @@ pub use env_lib as env;
 /// also uses the `log` crate writes `use system_suite::log as slog;`
 /// (D-015). The system's logger is [`Foundation::log`]; a logger of the
 /// application's own should be built with `try_build`, since `build`
-/// panics when no sink was added (D-101).
+/// panics when no sink was added (D-101). log-io's `init_json`,
+/// `init_logfmt`, and `init_human` install a process-wide logger: a
+/// process-wide system installs its own, so they are for programs that do
+/// not boot one.
 #[cfg(feature = "log")]
 #[cfg_attr(docsrs, doc(cfg(feature = "log")))]
 pub use log_io as log;
