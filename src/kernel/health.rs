@@ -69,19 +69,22 @@ impl Health {
         reason: None,
     };
 
-    /// Degraded, with a reason.
+    /// Degraded, with a reason, cut to 256 bytes on a character boundary
+    /// (a health report is served to whoever can reach the endpoint, so a
+    /// reason must stay short and must not quote data).
     pub fn degraded(reason: impl Into<Cow<'static, str>>) -> Health {
         Health {
             status: Status::Degraded,
-            reason: Some(reason.into()),
+            reason: Some(super::urgent::cap_reason(reason.into())),
         }
     }
 
-    /// Unhealthy, with a reason.
+    /// Unhealthy, with a reason, cut to 256 bytes like
+    /// [`degraded`](Self::degraded)'s.
     pub fn unhealthy(reason: impl Into<Cow<'static, str>>) -> Health {
         Health {
             status: Status::Unhealthy,
-            reason: Some(reason.into()),
+            reason: Some(super::urgent::cap_reason(reason.into())),
         }
     }
 
@@ -140,8 +143,12 @@ pub struct ComponentHealth {
 ///
 /// The aggregate is the worst component status, except that a worker that
 /// is not critical can make the system at most `Degraded` (D-022). Reasons
-/// are the components' own words; the report never contains a configuration
-/// value or a secret.
+/// are the components' own words, at most 256 bytes each. The suite writes
+/// no configuration value or secret into them, and keeps error text out: a
+/// worker's reason is the message of its [`Failure::new`](crate::lifecycle::Failure::new),
+/// while an error converted with `?` or a panic shows only that the
+/// message is in the log. A subsystem's reason is whatever its `health`
+/// returns, so it must not quote data either.
 ///
 /// # Examples
 ///

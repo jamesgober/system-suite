@@ -66,7 +66,7 @@ crate still builds. No feature brings an async runtime.
 |---|---|---|---|---|
 | `kernel` | yes | this crate: `kernel`, `lifecycle`, `runtime` | stop decisions, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
 | `sys` | yes | sys-lib 0.5 | build info, instance info, process guard | none |
-| `paths` | yes | path-lib 1.1 | application and OS directories, owner-only where the suite writes | none |
+| `paths` | yes | path-lib 1.2 | application and OS directories, owner-only where the suite writes; file access checks on Windows | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
 | `config` | yes | config-lib 1.3, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2.1 | structured logging, the crash report's recent lines | none |
@@ -78,7 +78,7 @@ crate still builds. No feature brings an async runtime.
 | `registry` | no | registry-io 1.1 (implies `kernel`) | kernel events delivered to callbacks | none |
 | `globals` | no | global-lib 1 | process-wide typed values; `system_suite::foundation()` | none |
 | `rand` | no | mod-rand 1 | OS CSPRNG and fast generators | none |
-| `secrets` | no | key-vault 1.1 (implies `kernel`, `config`, `rand`) | secret references resolved into a page-locked vault | subtle, getrandom, blake3, zeroize, arc-swap |
+| `secrets` | no | key-vault 1.2 (implies `kernel`, `config`, `rand`) | secret references resolved into a page-locked vault | subtle, getrandom, blake3, zeroize, arc-swap |
 | `full` | no | all of the above | | as above |
 
 Every third-party crate in this table is a reviewed choice recorded in the
@@ -766,7 +766,9 @@ In the `conf` format a value with spaces must be quoted: an unquoted
 ### `Config`
 
 An immutable snapshot of the configuration; `system.config()` returns the
-one in force (a cheap clone). Keys are dotted paths. `get` returns
+one in force (lock-free: a pointer read and one reference count; a
+per-request handler keeps a `Reader` from `config_snapshot()` instead,
+one atomic load). Keys are dotted paths. `get` returns
 `Ok(None)` for an absent key and `ConfigInvalid` (naming the key, the type
 expected, and the type found, never the value) for a present key of the
 wrong type; `require` also fails for an absent key; `get_or` takes a
@@ -952,7 +954,7 @@ from the configuration in force keeps its value through one reload
 The first that applies wins:
 
 1. `Builder::config_file(path)` or `Builder::config_str(text)`;
-2. the `<NAME>_CONFIG` variable (process environment or `.env` file);
+2. the `<NAME>_CONFIG` variable in the process environment, then `<NAME>_CONFIG=` or `CONFIG=` in the `.env` file;
 3. `<config dir>/<name>.conf` (with `config-toml`, `config-noml`, or
    `config-json`, also `<name>.toml`, `.noml`, or `.json`; finding two is
    `ConfigInvalid` naming both);
@@ -1071,7 +1073,11 @@ timer thread into a `HealthReport` (it allocates: for health endpoints
 and the dump signal). `kernel().status()` returns only the aggregate and
 allocates nothing of its own. The aggregate is the worst component status,
 except that a worker that is not `critical` makes the system at most
-`Degraded`. The report never contains a configuration value or a secret.
+`Degraded`. Each reason is at most 256 bytes. The suite writes no
+configuration value or secret into a reason: a worker's reason is the
+message of its `Failure::new`, while an error converted with `?` (whose
+text can quote a URL or a response) and a panic show only that the message
+is in the log. A subsystem's reason is whatever its `health` returns.
 
 ```rust
 use system_suite::kernel::{Health, Status};
@@ -1122,15 +1128,17 @@ control manager gets `SERVICE_RUNNING`.
 
 | Signal | Unix | Windows | Kernel decision |
 |---|---|---|---|
-| terminate | SIGTERM | console close, logoff, system shutdown, service stop and preshutdown | stop |
+| terminate | SIGTERM | console close; as a service: stop, shutdown, preshutdown | stop |
 | interrupt | SIGINT | Ctrl+C | stop |
-| quit | SIGQUIT | Ctrl+Break | stop |
-| reload | SIGHUP | service `PARAMCHANGE` | `reload` |
+| quit | SIGQUIT | Ctrl+Break | stop (a graceful one, as nginx treats SIGQUIT; `kill -ABRT` still gives a core) |
+| hangup | SIGHUP, at a terminal with no service manager, or with `reload_signal` off | logoff, system shutdown | Unix: stop. Windows: ignored, so a user logging off never stops a service |
+| reload | SIGHUP, under a service manager (or not at a terminal) | service `PARAMCHANGE` | `reload` |
 | dump | SIGUSR1 | service user control code 128 | the health report, phase, urgent level, workers, build and instance info written to the log |
 | a second stop signal during shutdown | | | recorded and ignored: the shutdown already has a deadline |
 
 The signal intake is installed at boot step 7, only for a process-wide
-system. `[kernel] reload_signal` and `dump_signal` turn those two off.
+system. `[kernel] reload_signal` and `dump_signal` turn those two off; with
+`reload_signal` off SIGHUP stops the process, its default meaning.
 
 ## The urgent line
 
@@ -1368,7 +1376,7 @@ it is `Send + Sync`. `system.foundation()` hands one to a thread.
 | `guard_report()` | `&sys::process::GuardReport`: the lock, the umask, the open-file limit | `sys` |
 | `paths()` | `&path::App` | `paths` |
 | `env()` | `&env::Env` (prefix `<NAME>_`) | `env` |
-| `config()` | `config::Config`, the one in force (a cheap clone) | `config` |
+| `config()` | `config::Config`, the one in force (lock-free: a pointer read and one reference count) | `config` |
 | `config_snapshot()` | `&SnapshotView<config::Config>`, for a per-thread `Reader` | `config` |
 | `log()` | `&log::Logger` | `log` |
 | `metrics()` | `&metrics::MetricsCore` (metrics-lib's global one in a process-wide system) | `metrics` |
@@ -1547,7 +1555,7 @@ Linux, macOS, and Windows on x86_64 and aarch64, stable Rust and MSRV
 
 | Behaviour | Linux | macOS | Windows |
 |---|---|---|---|
-| stop signals | SIGTERM, SIGINT, SIGQUIT | same | Ctrl+C, Ctrl+Break, console close, logoff, system shutdown, service stop (D-014) |
+| stop signals | SIGTERM, SIGINT, SIGQUIT; SIGHUP at a terminal with no service manager | same | Ctrl+C, Ctrl+Break, console close, service stop and shutdown (D-014); never logoff (D-099) |
 | reload signal | SIGHUP | same | service `PARAMCHANGE`; otherwise `System::reload` only |
 | dump signal | SIGUSR1 | same | service user control code 128 |
 | umask | `0o027` by the guard | same | not applicable; the log and lock directories get an owner-only access control list |

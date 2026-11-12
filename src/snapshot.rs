@@ -8,15 +8,18 @@ use std::{
     },
 };
 
+use arc_swap::ArcSwap;
+
 /// A value that is read on every request and replaced whole on a reload:
 /// profiles, compiled rules, budgets, and the configuration itself.
 ///
 /// [`publish`](Self::publish) swaps in a complete new value in one step.
 /// Readers already holding the old value keep it until their next
 /// [`Reader::get`], and the old value is freed when the last reader moves
-/// on. Give each worker thread its own [`Reader`]: `get` is one atomic load
-/// and a compare when nothing changed, and a short lock plus an `Arc` clone
-/// only right after a publish.
+/// on. [`load`](Self::load) takes no lock: a lock-free pointer read and one
+/// `Arc` clone, so threads that call it at once do not wait on each other
+/// (D-100). A [`Reader`] is cheaper still for a thread that reads on every
+/// request: `get` is one atomic load and a compare when nothing changed.
 ///
 /// `Snapshot` is `Send + Sync` and cheap to clone (the clones share one
 /// slot). Versions start at 1 and grow by one per publish.
@@ -39,8 +42,19 @@ pub struct Snapshot<T> {
 }
 
 struct Shared<T> {
+    /// The version of `current`, for a reader's fast check. Stored after
+    /// `current`, so a reader that sees it finds that value or a newer one.
     version: AtomicU64,
-    current: Mutex<Arc<T>>,
+    /// The value and its version, swapped in together.
+    current: ArcSwap<Versioned<T>>,
+    /// Orders publishers, so versions grow by one per publish.
+    publishing: Mutex<()>,
+}
+
+/// A value and the version it was published as.
+struct Versioned<T> {
+    version: u64,
+    value: Arc<T>,
 }
 
 impl<T: Send + Sync + 'static> Snapshot<T> {
@@ -49,7 +63,11 @@ impl<T: Send + Sync + 'static> Snapshot<T> {
         Snapshot {
             shared: Arc::new(Shared {
                 version: AtomicU64::new(1),
-                current: Mutex::new(Arc::new(value)),
+                current: ArcSwap::from_pointee(Versioned {
+                    version: 1,
+                    value: Arc::new(value),
+                }),
+                publishing: Mutex::new(()),
             }),
         }
     }
@@ -58,19 +76,25 @@ impl<T: Send + Sync + 'static> Snapshot<T> {
     /// their next `get`.
     pub fn publish(&self, value: T) -> u64 {
         let value = Arc::new(value);
-        let mut current = self.lock();
-        *current = value;
-        // Bumped while the lock is held, so the version a reader sees after
-        // taking the lock always matches the value it finds.
-        let version = self.shared.version.fetch_add(1, Ordering::AcqRel) + 1;
-        drop(current);
+        // One publisher at a time; readers never take this lock.
+        let publishing = self
+            .shared
+            .publishing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let version = self.shared.current.load().version.saturating_add(1);
+        self.shared
+            .current
+            .store(Arc::new(Versioned { version, value }));
+        self.shared.version.store(version, Ordering::Release);
+        drop(publishing);
         version
     }
 
-    /// The current value.
+    /// The current value. Lock-free: a pointer read and one `Arc` clone.
     #[must_use]
     pub fn load(&self) -> Arc<T> {
-        Arc::clone(&self.lock())
+        Arc::clone(&self.shared.current.load().value)
     }
 
     /// The current version.
@@ -82,23 +106,12 @@ impl<T: Send + Sync + 'static> Snapshot<T> {
     /// A reader for one thread.
     #[must_use]
     pub fn reader(&self) -> Reader<T> {
-        let current = self.lock();
-        let seen = self.shared.version.load(Ordering::Acquire);
-        let cached = Arc::clone(&current);
-        drop(current);
+        let current = self.shared.current.load();
         Reader {
             shared: Arc::clone(&self.shared),
-            seen,
-            cached,
+            seen: current.version,
+            cached: Arc::clone(&current.value),
         }
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Arc<T>> {
-        // The lock guards one `Arc` assignment; it cannot be left half-done.
-        self.shared
-            .current
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -209,13 +222,10 @@ impl<T: Send + Sync + 'static> Reader<T> {
 
     #[cold]
     fn refresh(&mut self) {
-        let current = self
-            .shared
-            .current
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        self.cached = Arc::clone(&current);
-        self.seen = self.shared.version.load(Ordering::Acquire);
+        // The value and its version come from one load, so they match.
+        let current = self.shared.current.load();
+        self.cached = Arc::clone(&current.value);
+        self.seen = current.version;
     }
 
     /// The version of the value `get` last returned.
@@ -238,6 +248,45 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    #[test]
+    fn test_a_readers_value_and_version_always_match_under_publishes() {
+        // D-100: `load` and `Reader::get` take no lock. The value published
+        // as version v is v here, so a mismatch shows directly.
+        let snapshot = Snapshot::new(1_u64);
+        let publisher = {
+            let snapshot = snapshot.clone();
+            thread::spawn(move || {
+                for _ in 0..20_000 {
+                    let next = *snapshot.load() + 1;
+                    let version = snapshot.publish(next);
+                    assert_eq!(version, next);
+                }
+            })
+        };
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let snapshot = snapshot.clone();
+                thread::spawn(move || {
+                    let mut reader = snapshot.reader();
+                    let mut last = 0;
+                    for _ in 0..50_000 {
+                        let value = *reader.get();
+                        assert_eq!(value, reader.version());
+                        assert!(value >= last, "went back from {last} to {value}");
+                        last = value;
+                        assert!(*snapshot.load() >= value);
+                    }
+                })
+            })
+            .collect();
+        assert!(publisher.join().is_ok());
+        for reader in readers {
+            assert!(reader.join().is_ok());
+        }
+        assert_eq!(snapshot.version(), 20_001);
+        assert_eq!(*snapshot.load(), 20_001);
+    }
 
     #[test]
     fn test_snapshot_starts_at_version_one() {

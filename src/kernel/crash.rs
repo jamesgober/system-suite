@@ -140,6 +140,42 @@ fn capture(state: &CrashState, info: &PanicHookInfo<'_>) {
         // The hook cannot return an error; the log is the only place left.
         report_failure(&state.settings.log, &error.to_string());
     }
+    // The cap holds across starts too: a crash at every start under a
+    // restart policy keeps the newest reports, not all of them (D-100).
+    prune(dir, state.settings.max_reports);
+}
+
+/// Removes the oldest crash reports in `dir` until `keep` are left. Only
+/// files the hook writes (`crash-*.txt`, regular files) are touched, and a
+/// failure leaves the files as they are: this runs inside the panic hook.
+pub(crate) fn prune(dir: &Path, keep: u32) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut reports: Vec<(SystemTime, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("crash-") && name.ends_with(".txt")
+        })
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            metadata.is_file().then(|| {
+                let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+                (modified, entry.path())
+            })
+        })
+        .collect();
+    let keep = usize::try_from(keep).unwrap_or(usize::MAX);
+    if reports.len() <= keep {
+        return;
+    }
+    // Newest first; the name breaks ties (it holds the time and a count).
+    reports.sort_by(|a, b| b.cmp(a));
+    for (_, path) in reports.into_iter().skip(keep) {
+        let _removed = fs::remove_file(path);
+    }
 }
 
 fn panic_message(info: &PanicHookInfo<'_>) -> String {
@@ -370,6 +406,42 @@ mod tests {
             assert_eq!(mode.ok(), Some(0o600));
         }
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_prune_keeps_the_newest_reports_and_nothing_else() {
+        // D-100: the cap holds across processes; other files are left alone.
+        let dir =
+            std::env::temp_dir().join(format!("system-suite-crash-prune-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).ok();
+        for n in 0..5 {
+            assert!(write_report(&dir, &format!("crash-1-100{n}-0.txt"), "r").is_ok());
+            // Distinct modification times on coarse file systems.
+            thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(fs::write(dir.join("app.log"), "keep").is_ok());
+        assert!(fs::create_dir_all(dir.join("crash-dir.txt")).is_ok());
+        prune(&dir, 2);
+        let mut left: Vec<String> = fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        left.sort();
+        fs::remove_dir_all(&dir).ok();
+        assert_eq!(
+            left,
+            [
+                "app.log",
+                "crash-1-1003-0.txt",
+                "crash-1-1004-0.txt",
+                "crash-dir.txt"
+            ]
+        );
     }
 
     #[test]

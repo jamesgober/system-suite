@@ -114,7 +114,7 @@ A stop is requested by a stop signal, `Kernel::request_stop`, a critical worker 
 | 4 | registry | event handlers are cleared and waited for, so none runs while members close | 0.5 |
 | 5 | audit | the chain is flushed and synced to disk | 0.5 |
 | 6 | metrics | a final export, when an exporter is configured (the suite configures none in 0.4); process-wide registries stay readable | 0.4 |
-| 7 | secrets | the vault is dropped, which wipes every secret | 0.5 |
+| 7 | secrets | every secret the configuration resolved is removed from the vault and wiped; keys the application registered itself stay until the last `Foundation` clone drops | 0.5 |
 | 8 | signals | the signal intake is uninstalled; a further signal gets the operating system's default action | 0.3 |
 | 9 | logging | the last line (the exit code and the uptime), then flush and close | 0.3 |
 | 10 | `Stopped` | the phase becomes `Stopped`; the panic hook is removed (the previous one is put back); `run` returns the exit code; the guard is dropped, releasing the lock | 0.3 |
@@ -156,11 +156,11 @@ Reloads are serialised, and a reload after a stop request is refused (`Stopping`
 A panic anywhere in the process, once step 11 completed, runs the crash hook:
 
 1. the panic is logged at error level with its location and thread;
-2. logging, the audit chain, and metrics are flushed (each with a short bound, so a stuck sink cannot hold the process);
+2. logging and the audit chain are flushed (each with a short bound, so a stuck sink cannot hold the process); metrics are not, since they live in memory;
 3. the crash report `crash-<instance>-<unix time>.txt` is written owner-only to the log directory: build info, instance info, the panic message and location, the thread, and the last log lines (already redacted by the logger);
 4. the previous panic hook runs, and the process ends as the application's profile decides (`panic = "abort"` in release).
 
-A panic in a supervised worker under `panic = "unwind"` also produces a report, and the worker is restarted per its policy. At most `[crash] max_reports` reports (default 8) are written per process, so a panic loop cannot fill the disk.
+A panic in a supervised worker under `panic = "unwind"` also produces a report, and the worker is restarted per its policy. At most `[crash] max_reports` reports (default 8) are written per process, and after each report the oldest are removed until that many are left, so a panic loop, or a crash at every start under a restart policy, cannot fill the disk.
 
 ## Changes from the 0.1.0 plan
 

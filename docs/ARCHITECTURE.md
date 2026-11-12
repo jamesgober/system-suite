@@ -76,7 +76,8 @@ With `audit`, step 13 opens the chain with audit-trail's verified open: every re
 | Thread | Started by | Lives |
 |---|---|---|
 | `system-suite-signals` | step 7 (process-wide mode) | until shutdown step 8 |
-| `system-suite-timer` | the first timer (`runtime.every` / `after`; the audit flush and systemd keep-alive use timers) | until shutdown step 3 |
+| `system-suite-timer` | the first timer (`runtime.every` / `after`; the audit flush uses one) | until shutdown step 3 |
+| the `systemd-watchdog` worker | the systemd keep-alive, when `WATCHDOG_USEC` asks for one; its own thread, so a slow timer callback cannot hold it back | until shutdown step 3 |
 | `worker-<name>` | each `Worker::spawn` | until it returns and is not restarted, or shutdown step 3 |
 | `system-suite-stop-<step>` | each bounded shutdown step | the step; abandoned at the deadline |
 | the service manager's thread | Windows service mode (`run`) | the life of the service |
