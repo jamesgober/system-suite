@@ -57,10 +57,7 @@ impl SignalIntake {
         dump_on: bool,
     ) -> Result<SignalIntake, Error> {
         let (stop, notify) = signal_sets();
-        let coordinator = Coordinator::builder()
-            .signals(stop)
-            .notify_signals(notify)
-            .build();
+        let coordinator = coordinator(stop, notify);
         let mut subscription = coordinator.subscribe();
         coordinator.install().map_err(|e| {
             Error::new(
@@ -177,14 +174,6 @@ fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, actio
                 &[("signal", Val::Str(name))],
             ),
         },
-        // Windows: a user logged off, or the machine is shutting down. Only
-        // a service receives these, and a service stops on the service
-        // manager's shutdown control, so a logoff must not stop it (D-099).
-        #[cfg(windows)]
-        Signal::Hangup => log.info(
-            "logoff or shutdown event ignored: a service stops on the service manager's shutdown control",
-            &[("signal", Val::Str(name))],
-        ),
         _ => log.warn("unexpected signal ignored", &[("signal", Val::Str(name))]),
     }
 }
@@ -222,42 +211,56 @@ fn under_service_manager() -> bool {
         .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty() && v != "0"))
 }
 
-/// The stop and notify sets for this OS.
+/// The stop and notify sets for this OS (D-102).
 ///
-/// On Unix SIGHUP is the reload signal. On Windows signal-mod reports
-/// logoff and system shutdown as `Hangup`. It is received (so no default
-/// handler ends the process) but never stops it: any user logging off
-/// would stop every service (D-099), and a service learns of a shutdown from
-/// the service manager's shutdown control, which arrives as `Terminate`.
+/// The stop set is signal-mod's [`SignalSet::stop`]: SIGTERM and SIGINT
+/// (on Windows console close and Ctrl+C; the service manager's stop and
+/// shutdown arrive as `Terminate`). SIGQUIT keeps the meaning the OS gives
+/// it, quit with a core dump, for a process that hangs. On Windows,
+/// Ctrl+Break (`Quit`) stops too, since its default there ends the process
+/// without a shutdown. SIGHUP is the reload signal on Unix (see
+/// [`hangup_stops`]); signal-mod 2.2 no longer reports a Windows logoff at
+/// all, so a user logging off never reaches the kernel.
 #[cfg(unix)]
 fn signal_sets() -> (SignalSet, SignalSet) {
-    let stop = SignalSet::empty()
-        .with(Signal::Terminate)
-        .with(Signal::Interrupt)
-        .with(Signal::Quit);
     let notify = SignalSet::empty().with(Signal::Hangup).with(Signal::User1);
-    (stop, notify)
+    (SignalSet::stop(), notify)
 }
 
 #[cfg(windows)]
 fn signal_sets() -> (SignalSet, SignalSet) {
-    let stop = SignalSet::empty()
-        .with(Signal::Terminate)
-        .with(Signal::Interrupt)
-        .with(Signal::Quit);
     // Only the service control manager produces User1 and User2 on
     // Windows: user control code 128 (dump) and parameter change (reload).
-    // Hangup (logoff, shutdown) reaches services only; see above.
-    let notify = SignalSet::empty()
-        .with(Signal::User1)
-        .with(Signal::User2)
-        .with(Signal::Hangup);
-    (stop, notify)
+    let notify = SignalSet::empty().with(Signal::User1).with(Signal::User2);
+    (SignalSet::stop().with(Signal::Quit), notify)
 }
 
 #[cfg(not(any(unix, windows)))]
 fn signal_sets() -> (SignalSet, SignalSet) {
     (SignalSet::empty(), SignalSet::empty())
+}
+
+/// The coordinator for `stop` and `notify`.
+///
+/// Unix: signal-mod's default builder with the notify set, whose stop set
+/// is then [`SignalSet::stop`] (its default minus SIGHUP), and which
+/// leaves a stop signal ignored before boot ignored: SIGHUP under `nohup`,
+/// or SIGINT for a job a script started in the background. An explicit
+/// set would catch those too.
+#[cfg(unix)]
+fn coordinator(stop: SignalSet, notify: SignalSet) -> Coordinator {
+    debug_assert!(stop == SignalSet::stop());
+    Coordinator::builder().notify_signals(notify).build()
+}
+
+/// Elsewhere the stop set is given as it is: nothing is ignored before
+/// boot on Windows, and Ctrl+Break is added to the default.
+#[cfg(not(unix))]
+fn coordinator(stop: SignalSet, notify: SignalSet) -> Coordinator {
+    Coordinator::builder()
+        .signals(stop)
+        .notify_signals(notify)
+        .build()
 }
 
 /// The conventional name of a signal on this OS.
@@ -297,15 +300,17 @@ mod tests {
         let (stop, notify) = signal_sets();
         assert!(stop.contains(Signal::Terminate));
         assert!(stop.contains(Signal::Interrupt));
-        assert!(stop.contains(Signal::Quit));
+        assert!(!stop.contains(Signal::Hangup));
         if cfg!(unix) {
-            assert!(!stop.contains(Signal::Hangup));
+            // D-102: signal-mod's stop set; SIGQUIT keeps its core dump.
+            assert_eq!(stop, SignalSet::stop());
+            assert!(!stop.contains(Signal::Quit));
             assert!(notify.contains(Signal::Hangup));
             assert!(notify.contains(Signal::User1));
         } else {
-            // D-099: a logoff (Hangup) must not stop a Windows service.
-            assert!(!stop.contains(Signal::Hangup));
-            assert!(notify.contains(Signal::Hangup));
+            // Ctrl+Break stops gracefully; a logoff is never delivered.
+            assert!(stop.contains(Signal::Quit));
+            assert!(!notify.contains(Signal::Hangup));
         }
     }
 
@@ -336,7 +341,8 @@ mod tests {
                 Some(StopReason::Signal { name: "SIGHUP" })
             );
         } else {
-            // Windows: logoff and shutdown never stop (D-099).
+            // Windows: Hangup is never delivered (signal-mod 2.2), and the
+            // flag is for Unix only.
             assert_eq!(kernel.stop_reason(), None);
         }
     }

@@ -1455,9 +1455,13 @@ fn step_metrics(parts: &mut Parts) -> Result<(), Error> {
         .member_of(Member::Metrics)
         .caused_by(e)
     };
+    let family_cap = section.max_family_series;
     let core = if parts.settings.process_wide {
         match metrics_lib::init_with_config(config) {
-            Ok(core) => MetricsRef::Global(core),
+            Ok(core) => {
+                core.registry().set_family_cardinality_cap(family_cap);
+                MetricsRef::Global(core)
+            }
             Err(metrics_lib::MetricsError::AlreadyInitialized) => {
                 match metrics_lib::try_metrics() {
                     Some(core) => {
@@ -1475,9 +1479,9 @@ fn step_metrics(parts: &mut Parts) -> Result<(), Error> {
             Err(e) => return Err(metrics_error(e)),
         }
     } else {
-        MetricsRef::Owned(std::sync::Arc::new(
-            metrics_lib::MetricsCore::with_config(config).map_err(metrics_error)?,
-        ))
+        let core = metrics_lib::MetricsCore::with_config(config).map_err(metrics_error)?;
+        core.registry().set_family_cardinality_cap(family_cap);
+        MetricsRef::Owned(std::sync::Arc::new(core))
     };
     parts.metrics = Some(core);
     Ok(())

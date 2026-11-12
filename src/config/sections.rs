@@ -38,7 +38,7 @@ const KNOWN: &[(&str, &[&str])] = &[
         ],
     ),
     ("crash", &["enabled", "max_reports"]),
-    ("metrics", &["enabled", "max_series"]),
+    ("metrics", &["enabled", "max_series", "max_family_series"]),
     (
         "kernel",
         &[
@@ -155,6 +155,13 @@ pub(crate) fn read(config: &Config) -> Result<Sections, Error> {
         config,
         "metrics.max_series",
         s.metrics.max_series,
+        1,
+        10_000_000,
+    )?;
+    s.metrics.max_family_series = bounded(
+        config,
+        "metrics.max_family_series",
+        s.metrics.max_family_series,
         1,
         10_000_000,
     )?;

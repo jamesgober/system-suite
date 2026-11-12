@@ -808,12 +808,7 @@ fn test_kernel_metrics_are_recorded_in_the_systems_registry() {
         .unwrap();
     write_private(&file, "[app\n");
     assert!(system.reload().is_err());
-    write_private(
-        &file,
-        "[app]
-limit = 2
-",
-    );
+    write_private(&file, "[app]\nlimit = 2\n");
     assert_eq!(system.reload().unwrap(), 2);
     let reloads = |outcome: &str| {
         let labels = system_suite::metrics::LabelSet::EMPTY.with("outcome", outcome.to_owned());
@@ -824,6 +819,23 @@ limit = 2
     };
     assert_eq!(reloads("refused"), 1);
     assert_eq!(reloads("accepted"), 1);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "metrics")]
+#[test]
+fn test_the_family_series_cap_comes_from_the_configuration() {
+    // D-102: metrics-lib 2.2's per-family cap, 5000 unless configured.
+    let root = Root::new("familycap");
+    let system = quiet("kernel-familycap", &root).start().unwrap();
+    assert_eq!(system.metrics().registry().family_cardinality_cap(), 5_000);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let file = root.write_config("[metrics]\nmax_family_series = 250\n");
+    let system = quiet("kernel-familycap", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    assert_eq!(system.metrics().registry().family_cardinality_cap(), 250);
     assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
 

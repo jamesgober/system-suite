@@ -1,7 +1,7 @@
 <h1 align="center">
     <img width="99" alt="Rust logo" src="https://raw.githubusercontent.com/jamesgober/rust-collection/72baabd71f00e14aa9184efcb16fa3deddda3a0a/assets/rust-logo.svg">
     <br><b>system-suite</b><br>
-    <sub><sup>API REFERENCE &middot; v0.9.0</sup></sub>
+    <sub><sup>API REFERENCE &middot; v0.9.1</sup></sub>
 </h1>
 <div align="center">
     <sup>
@@ -68,14 +68,14 @@ crate still builds. No feature brings an async runtime.
 | `sys` | yes | sys-lib 0.5 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1.2 | application and OS directories, owner-only where the suite writes; file access checks on Windows | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
-| `config` | yes | config-lib 1.3, `conf` format (implies `paths`) | one configuration file, reload | thiserror, serde, dashmap, arc-swap (through config-lib) |
-| `log` | yes | log-io 2.1 | structured logging, the crash report's recent lines | none |
-| `metrics` | yes | metrics-lib 2.1 (counters, gauges, timers) | the system's registry and the kernel's own metrics | none |
-| `signals` | yes | signal-mod 2.1, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
+| `config` | yes | config-lib 1.4, `conf` format (implies `paths`) | one configuration file, reload | thiserror, dashmap, arc-swap (through config-lib) |
+| `log` | yes | log-io 2.2 | structured logging, the crash report's recent lines | none |
+| `metrics` | yes | metrics-lib 2.2 (counters, gauges, timers) | the system's registry and the kernel's own metrics | none |
+| `signals` | yes | signal-mod 2.2.1, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
 | `time` | yes | clock-lib 1.1 | monotonic and wall clocks, a mockable `Clock` | none |
 | `ids` | yes | id-forge 1 | ULID, UUID, Snowflake | none |
 | `audit` | no (D-035) | audit-trail 1.2 with sha2 (implies `kernel`, `paths`) | tamper-evident audit chain | sha2 |
-| `registry` | no | registry-io 1.1 (implies `kernel`) | kernel events delivered to callbacks | none |
+| `registry` | no | registry-io 1.2 (implies `kernel`) | kernel events delivered to callbacks | none |
 | `globals` | no | global-lib 1 | process-wide typed values; `system_suite::foundation()` | none |
 | `rand` | no | mod-rand 1 | OS CSPRNG and fast generators | none |
 | `secrets` | no | key-vault 1.2 (implies `kernel`, `config`, `rand`) | secret references resolved into a page-locked vault | subtle, getrandom, blake3, zeroize, arc-swap |
@@ -980,7 +980,7 @@ reference is [`CONFIGURATION.md`](./CONFIGURATION.md).
 | `[guard]` | `lock` (`true`), `lock_dir` (the runtime directory), `allow_network_lock` (`false`), `umask` (`"0027"`), `open_files_target` (`65536`), `open_files_minimum` (`1024`) |
 | `[log]` | `level` (`"info"`), `filter`, `format` (`"auto"`, `"human"`, `"json"`, `"logfmt"`), `stderr` (`true`), `file` (`true`), `max_bytes`, `rotation` (`"daily"`, `"hourly"`, `"never"`), `max_files` (`14`), `redact`, `redact_common` (`true`), `recent_lines` (`64`) |
 | `[crash]` | `enabled` (`true`), `max_reports` (`8`) |
-| `[metrics]` | `enabled` (`true`), `max_series` (`10000`) |
+| `[metrics]` | `enabled` (`true`), `max_series` (`10000`), `max_family_series` (`5000`) |
 | `[kernel]` | `shutdown_deadline` (`"25s"`), `member_reserve` (`"2s"`), `notify` (`"auto"`), `reload_signal` (`true`), `dump_signal` (`true`), `memory_watch` (off), `memory_shed` (`90`) |
 | `[ids]` | `worker` (`0`, 0 to 1023), `epoch` (id-forge's default) |
 | `[audit]` | `enabled` (`true` when compiled in), `file` (`<data dir>/audit/<name>.audit`), `hash` (`"sha256"`), `sync` (`"every"` or `"flush"`), `repair_tail` (`false`) |
@@ -1128,10 +1128,10 @@ control manager gets `SERVICE_RUNNING`.
 
 | Signal | Unix | Windows | Kernel decision |
 |---|---|---|---|
-| terminate | SIGTERM | console close; as a service: stop, shutdown, preshutdown | stop |
+| terminate | SIGTERM | console close, machine shutdown; as a service: stop, shutdown, preshutdown | stop |
 | interrupt | SIGINT | Ctrl+C | stop |
-| quit | SIGQUIT | Ctrl+Break | stop (a graceful one, as nginx treats SIGQUIT; `kill -ABRT` still gives a core) |
-| hangup | SIGHUP, at a terminal with no service manager, or with `reload_signal` off | logoff, system shutdown | Unix: stop. Windows: ignored, so a user logging off never stops a service |
+| quit | SIGQUIT: not caught, so the OS quits with a core dump (since 0.9.1) | Ctrl+Break | Windows: stop |
+| hangup | SIGHUP, at a terminal with no service manager, or with `reload_signal` off | never delivered (a logoff is declined, a machine shutdown is `terminate`) | Unix: stop |
 | reload | SIGHUP, under a service manager (or not at a terminal) | service `PARAMCHANGE` | `reload` |
 | dump | SIGUSR1 | service user control code 128 | the health report, phase, urgent level, workers, build and instance info written to the log |
 | a second stop signal during shutdown | | | recorded and ignored: the shutdown already has a deadline |
@@ -1555,7 +1555,7 @@ Linux, macOS, and Windows on x86_64 and aarch64, stable Rust and MSRV
 
 | Behaviour | Linux | macOS | Windows |
 |---|---|---|---|
-| stop signals | SIGTERM, SIGINT, SIGQUIT; SIGHUP at a terminal with no service manager | same | Ctrl+C, Ctrl+Break, console close, service stop and shutdown (D-014); never logoff (D-099) |
+| stop signals | SIGTERM, SIGINT (a signal ignored before boot, such as SIGINT for a background job, stays ignored); SIGHUP at a terminal with no service manager | same | Ctrl+C, Ctrl+Break, console close, machine shutdown, service stop and shutdown (D-014); never logoff |
 | reload signal | SIGHUP | same | service `PARAMCHANGE`; otherwise `System::reload` only |
 | dump signal | SIGUSR1 | same | service user control code 128 |
 | umask | `0o027` by the guard | same | not applicable; the log and lock directories get an owner-only access control list |
