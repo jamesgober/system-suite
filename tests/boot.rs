@@ -275,7 +275,9 @@ fn exit_value(kind: ErrorKind) -> u8 {
         | ErrorKind::ConfigInvalid
         | ErrorKind::Secret => exit::CONFIG,
         ErrorKind::AlreadyRunning => exit::TEMPORARY_FAILURE,
-        ErrorKind::LockDirInsecure | ErrorKind::ConfigInsecure => exit::NO_PERMISSION,
+        ErrorKind::LockDirInsecure | ErrorKind::DirectoryInsecure | ErrorKind::ConfigInsecure => {
+            exit::NO_PERMISSION
+        }
         ErrorKind::Limits => exit::UNAVAILABLE,
         ErrorKind::Interrupted => exit::OK,
         ErrorKind::Io => exit::IO_ERROR,
