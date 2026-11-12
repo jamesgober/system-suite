@@ -71,7 +71,7 @@ crate still builds. No feature brings an async runtime.
 | `config` | yes | config-lib 1.4, `conf` format (implies `paths`) | one configuration file, reload | thiserror, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2.2 | structured logging, the crash report's recent lines | none |
 | `metrics` | yes | metrics-lib 2.2 (counters, gauges, timers) | the system's registry and the kernel's own metrics | none |
-| `signals` | yes | signal-mod 2.2, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
+| `signals` | yes | signal-mod 2.2.1, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |
 | `time` | yes | clock-lib 1.1 | monotonic and wall clocks, a mockable `Clock` | none |
 | `ids` | yes | id-forge 1 | ULID, UUID, Snowflake | none |
 | `audit` | no (D-035) | audit-trail 1.2 with sha2 (implies `kernel`, `paths`) | tamper-evident audit chain | sha2 |

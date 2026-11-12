@@ -415,10 +415,14 @@ mod tests {
             std::env::temp_dir().join(format!("system-suite-crash-prune-{}", std::process::id()));
         fs::remove_dir_all(&dir).ok();
         fs::create_dir_all(&dir).ok();
-        for n in 0..5 {
-            assert!(write_report(&dir, &format!("crash-1-100{n}-0.txt"), "r").is_ok());
-            // Distinct modification times on coarse file systems.
-            thread::sleep(std::time::Duration::from_millis(20));
+        for n in 0..5_u64 {
+            let name = format!("crash-1-100{n}-0.txt");
+            assert!(write_report(&dir, &name, "r").is_ok());
+            // Set, not slept for: a clock that steps (WSL) or a coarse file
+            // system would otherwise order them by chance.
+            let file = fs::OpenOptions::new().write(true).open(dir.join(&name));
+            let at = UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 + n * 60);
+            assert!(file.and_then(|f| f.set_modified(at)).is_ok());
         }
         assert!(fs::write(dir.join("app.log"), "keep").is_ok());
         assert!(fs::create_dir_all(dir.join("crash-dir.txt")).is_ok());

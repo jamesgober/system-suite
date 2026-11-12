@@ -13,7 +13,11 @@
 
 ## [0.9.1] - 2026-11-12
 
-The members' review releases adopted: signal-mod 2.2, log-io 2.2, metrics-lib 2.2, config-lib 1.4, and registry-io 1.2 (D-102).
+The members' review releases adopted: signal-mod 2.2.1, log-io 2.2, metrics-lib 2.2, config-lib 1.4, and registry-io 1.2 (D-102).
+
+### Fixed
+
+- signal-mod 2.2.1 is required. With signal-mod 2.2.0 (which 0.9.0's `2.1.1` requirement also accepts) a process that stopped quickly on SIGTERM could be killed by that same SIGTERM partway through its shutdown, losing the shutdown's last steps (about 1 stop in 15 on a loaded Linux machine). Found by the suite's SIGHUP test and fixed in signal-mod; a 0.9.0 build picks up the fix with `cargo update -p signal-mod`.
 
 ### Changed
 

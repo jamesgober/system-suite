@@ -206,7 +206,7 @@ metrics-lib = { version = "2.2", optional = true, default-features = false, feat
 # Signals without an async runtime: the `agnostic` back-end only (never
 # `tokio`, D-005). Brings signal-hook and libc on Unix and windows-sys on
 # Windows (reviewed and accepted, dev/PLAN.md section 12.4, D-032).
-signal-mod = { version = "2.2", optional = true, default-features = false, features = ["std", "agnostic", "service"] }
+signal-mod = { version = "2.2.1", optional = true, default-features = false, features = ["std", "agnostic", "service"] }
 
 # Monotonic and wall clocks, mockable. First-party, no dependencies.
 clock-lib = { version = "1.1", optional = true, default-features = false, features = ["std"] }
