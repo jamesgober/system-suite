@@ -329,6 +329,12 @@ impl fmt::Debug for Mailbox {
 /// `std::error::Error` itself (that is what makes the blanket `From`
 /// possible); it is reached as the `source()` of that `Error`.
 ///
+/// A worker's health reason is the message of a [`Failure::new`], the
+/// application's own words, cut to 256 bytes. An error converted with `?`
+/// is logged with its text, but its health reason is only "error (the
+/// message is in the log)": error text can quote a URL, a query, or a
+/// response, and a health report is served to whoever can reach it.
+///
 /// # Examples
 ///
 /// ```
@@ -360,6 +366,17 @@ impl Failure {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// The text a health report may show: the message of a
+    /// [`Failure::new`], or a fixed text for a converted error (D-100).
+    #[cfg_attr(not(feature = "kernel"), allow(dead_code))]
+    pub(crate) fn public_text(&self) -> &str {
+        if self.source.is_some() {
+            "error (the message is in the log)"
+        } else {
+            &self.message
+        }
     }
 
     /// The failure as a `std::error::Error`, for an `Error`'s source.

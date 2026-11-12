@@ -78,7 +78,7 @@ fn main() {
 }
 ```
 
-The configuration is `<config dir>/<name>.conf` (or the file named by `<NAME>_CONFIG`); every key has a secure default, so the file is optional. A file another user can change is refused.
+The configuration is `<config dir>/<name>.conf` (or the file named by `<NAME>_CONFIG`); every key has a secure default, so the file is optional. A file another user can change is refused: on Unix by its mode and owner, on Windows by its owner and access control list.
 
 ```ini
 # site.conf
@@ -143,7 +143,7 @@ fn main() -> Result<std::process::ExitCode, system_suite::Error> {
 
 | system-suite | sys-lib | path-lib | env-lib | config-lib | log-io | metrics-lib | signal-mod | clock-lib | id-forge | audit-trail | registry-io | global-lib | mod-rand | key-vault |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0.9.0 | 0.5 | 1.1 | 1.0 | 1.3 | 2.1 | 2.1.1 | 2.1.1 | 1.1 | 1.0 | 1.2 | 1.1 | 1.0 | 1.0 | 1.1 |
+| 0.9.0 | 0.5 | 1.2 | 1.0 | 1.3 | 2.1 | 2.1.1 | 2.1.1 | 1.1 | 1.0 | 1.2 | 1.1 | 1.0 | 1.0 | 1.2 |
 
 Each is the lowest version the suite accepts; Cargo picks the newest compatible release.
 

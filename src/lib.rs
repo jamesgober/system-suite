@@ -178,7 +178,9 @@ pub use env_lib as env;
 
 /// Structured logging: [log-io](https://docs.rs/log-io). A project that
 /// also uses the `log` crate writes `use system_suite::log as slog;`
-/// (D-015).
+/// (D-015). The system's logger is [`Foundation::log`]; a logger of the
+/// application's own should be built with `try_build`, since `build`
+/// panics when no sink was added (D-101).
 #[cfg(feature = "log")]
 #[cfg_attr(docsrs, doc(cfg(feature = "log")))]
 pub use log_io as log;
@@ -220,7 +222,9 @@ pub use global_lib as global;
 pub use mod_rand as rand;
 
 /// Page-locked secret storage: [key-vault](https://docs.rs/key-vault). The
-/// system's vault is [`Foundation::vault`].
+/// system's vault is [`Foundation::vault`], which stores raw bytes; a
+/// vault from `KeyVaultBuilder`'s defaults normalizes keys with BLAKE3
+/// (D-101).
 #[cfg(feature = "secrets")]
 #[cfg_attr(docsrs, doc(cfg(feature = "secrets")))]
 pub use key_vault as vault;

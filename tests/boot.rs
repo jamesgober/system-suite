@@ -306,6 +306,7 @@ impl Scenario {
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();
+        make_private(&root);
         let prefix: String = name
             .chars()
             .map(|c| {
@@ -450,6 +451,36 @@ fn log_text(logs: &Path, name: &str) -> String {
 
 /// Writes a file only its owner can change (whatever the umask), as a
 /// configuration or `.env` file must be.
+/// Makes `dir` owner-only on Windows (the current user, SYSTEM, and
+/// Administrators, nothing inherited), as the suite's own directories are.
+/// A machine's temporary folder can grant other accounts write access, and
+/// the file checks rightly refuse what is inside it (D-098).
+#[cfg(windows)]
+fn make_private(dir: &Path) {
+    let user = match (env::var("USERDOMAIN"), env::var("USERNAME")) {
+        (Ok(domain), Ok(user)) => format!("{domain}\\{user}"),
+        (_, Ok(user)) => user,
+        _ => panic!("USERNAME is not set"),
+    };
+    let status = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{user}:(OI)(CI)F"))
+        .args([
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "/grant:r",
+            "*S-1-5-32-544:(OI)(CI)F",
+        ])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "icacls failed on {}", dir.display());
+}
+
+#[cfg(not(windows))]
+fn make_private(_dir: &Path) {}
+
 fn write_private(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
@@ -983,6 +1014,49 @@ fn test_t4_configuration_step_follows_the_env_file_redirect() {
     let output = scenario.run("boot");
     assert_boot_fails(&output, "step 5 (configuration)", exit::CONFIG);
     assert!(text(&output.stderr).contains("elsewhere.conf"));
+}
+
+#[cfg(windows)]
+#[test]
+fn test_t4_a_planted_env_file_cannot_redirect_the_configuration_on_windows() {
+    // D-098: any local user may create files under %ProgramData%. A `.env`
+    // another account can change must be refused, not followed.
+    let scenario = Scenario::new("it-confplanted");
+    let planted = scenario.root.join("planted.conf");
+    write_private(&planted, "[log]\nlevel = \"trace\"\n");
+    let env_file = scenario.dir("config").join(".env");
+    write_private(&env_file, &format!("CONFIG={}\n", planted.display()));
+    let status = std::process::Command::new("icacls")
+        .arg(&env_file)
+        .arg("/grant")
+        .arg("*S-1-1-0:(W)")
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = scenario.run("boot");
+    assert!(!output.status.success(), "{}", text(&output.stderr));
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("can be changed by other accounts"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("planted.conf"), "{stderr}");
+}
+
+#[test]
+fn test_t4_the_env_file_redirect_takes_the_prefixed_name_too() {
+    // D-100: `<NAME>_CONFIG=` in the .env file, as the docs write it, must
+    // redirect like `CONFIG=` instead of being ignored.
+    let scenario = Scenario::new("it-confprefix");
+    let missing = scenario.root.join("prefixed.conf");
+    write_private(
+        &scenario.dir("config").join(".env"),
+        &format!("IT_CONFPREFIX_CONFIG={}\n", missing.display()),
+    );
+    let output = scenario.run("boot");
+    assert_boot_fails(&output, "step 5 (configuration)", exit::CONFIG);
+    assert!(text(&output.stderr).contains("prefixed.conf"));
 }
 
 #[test]

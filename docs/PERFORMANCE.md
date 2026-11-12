@@ -88,6 +88,9 @@ The same profile on Windows (0.8.1, D-093), release profile, 300 boots after 20 
 | a reload | the file read and parse, plus each subsystem's preparation | `System::reload` |
 | one memory watermark reading | 10 µs on Linux, 8 µs on macOS, 1.9 µs on Windows (medians); at `memory_watch = "5s"`, about 2 parts per million of one core and 0.2 wake-ups per second | only with `[kernel] memory_watch` set |
 | `AuditLog::record` with `sync = "every"` | one `fdatasync` (milliseconds on rotating disks, tens of microseconds on NVMe) | per record |
+| verifying the audit chain at boot | linear in the chain: about 0.25 µs per record, so 31 ms at 100,000 records and 123 ms at 500,000 (release build, Windows). The boot times above are without `audit`, which is opt-in; a long-lived service with `audit` on should expect this on top. Verifying only the records after a checkpoint needs audit-trail support (recorded in `dev/ROADMAP.md`) | each boot, with `audit` |
+| `Foundation::config()` and `Snapshot::load` | lock-free: a pointer read and one reference-count increment. With 8 threads calling it at once on a shared, loaded Windows machine: 31 to 219 ns per call per thread (149 to 564 ns with the mutex it took before 0.9.0, same machine and run). The shared count still moves between cores, so a handler that reads per request keeps a `Reader` (0.3 ns unchanged) | per call |
+| a Windows file check | one `GetSecurityInfo` and one volume query on the opened file: 9.8 µs median, 20.7 µs p95 (release build) | each configuration, `.env`, secret, and audit-chain open |
 | `Secret::with` | key-vault's read path (defragment into a wiped scratch buffer) | per read |
 | `Kernel::health` | one `Vec` and the reasons; `status` allocates nothing of its own | per call |
 | a log line | log-io's pipeline: formatting and each sink | per line |

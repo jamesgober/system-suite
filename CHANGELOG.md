@@ -11,7 +11,7 @@
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-11-11
+## [0.9.0] - 2026-11-12
 
 The beta: the API simplified before 1.0. Each handle exists once, each task has one way to do it, the names are plain words, and a whole service is one line. Nothing about the boot, the shutdown, the configuration, or the defaults changed. Migration: [`docs/MIGRATION-0.9.md`](./docs/MIGRATION-0.9.md).
 
@@ -34,8 +34,23 @@ The beta: the API simplified before 1.0. Each handle exists once, each task has 
 - The exit code constants `DATAERR`, `CANTCREAT`, `IOERR`, `TEMPFAIL`, and `NOPERM` are `DATA_ERROR`, `CANNOT_CREATE`, `IO_ERROR`, `TEMPORARY_FAILURE`, and `NO_PERMISSION`, with the same values.
 - `docs/API.md` is rewritten as a task-oriented tour with runnable examples. The doctests that boot a system use a temporary root instead of the user's directories.
 
+### Security
+
+- Windows: the configuration, `.env`, `file:` secret, and audit-chain files are checked on the opened file, as on Unix: owned by the service's account, SYSTEM, or Administrators, and not changeable by any other account (a secret file not readable by one either). Before, nothing was checked, and `%ProgramData%` lets every local user create files, so a standard user could plant `<config dir>\.env` with `CONFIG=` and take over a system service's configuration. A missing system-wide configuration directory is created owner-only. Needs path-lib 1.2 (D-098).
+- Windows: a user logging off no longer stops every service on the machine. The logoff event is received and ignored; a service stops on the service manager's shutdown control as before (D-099).
+- Health reports no longer carry error text: a worker's reason is the message of its `Failure::new`, while an error converted with `?` (whose text can quote a URL with a key in it) shows only that the message is in the log. Every reason is cut to 256 bytes (D-100).
+- A reload with the secrets member disabled refuses a secret reference, as the boot does, instead of reading `env:NAME` as the literal value (D-100).
+- key-vault 1.2 is required: on 1.1 a nested `Secret::with` panicked. A secret the OS could not page-lock is reported at boot (D-100).
+
 ### Fixed
 
+- Unix: SIGHUP stops the process when it runs at a terminal with no service manager (the terminal went away) or with `[kernel] reload_signal = false`, instead of reloading and leaving a detached process holding the lock (D-099).
+- `<NAME>_CONFIG=` in the `.env` file redirects the configuration like `CONFIG=` (it was ignored without a word) (D-100).
+- The systemd keep-alive runs on its own thread: a slow timer callback held it back and could get a healthy service killed (D-100).
+- An empty secret file has its own error; only a page-lock failure points at the memory-lock limit (D-100).
+- Crash reports are capped across starts: after each report the oldest are removed until `[crash] max_reports` are left (D-100).
+- `Foundation::config()` and `Snapshot::load` take no lock (arc-swap): 31 to 219 ns per call with 8 threads at once, against 149 to 564 ns (D-100).
+- Documentation: the vault stores raw bytes and keeps keys registered in `on_vault` until the last `Foundation` clone drops; the crash hook flushes the log and the audit chain, not metrics; the defences that catch a panic need `panic = "unwind"`; the audit chain's verification cost is stated (D-101).
 - The features `kernel` and `sys` without any of the others did not compile: the memory watermark checked whether the `sys` member was disabled, which it cannot be. The dead check is removed, the kernel tests and the doctests build in every pair of features, and CI now tests the common pairs too.
 - Stale documentation: `ErrorKind::Secret`, `Builder::disable` (it listed five of the nine members that can be disabled), `System::run` (exit code 70), the `conf` list example in `config`, and the boot order's secret step. The error for a secret reference without the `secrets` feature no longer says to wait for it.
 

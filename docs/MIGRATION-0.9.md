@@ -52,6 +52,18 @@ Every other accessor on `System` (`log`, `config`, `paths`, `metrics`, `kernel`,
 
 `Error`'s `{:?}` now prints the same block as `Error::report` (what failed, at which step, and what to do), so an error returned from `main` with `?` reads as a report. `{:#?}` prints the fields.
 
+### Behaviour that changed
+
+| 0.8 | 0.9 | Why |
+|---|---|---|
+| Windows read any configuration, `.env`, or secret file | a file another account owns or can change is refused (`ConfigInsecure`), and a secret file another account can read (`Secret`) | any local user could plant one under `%ProgramData%`; fix the file with `icacls` as the error says |
+| a Windows service stopped when any user logged off | the logoff is ignored | it stopped every service on the machine |
+| SIGHUP always reloaded on Unix | at a terminal with no service manager, or with `reload_signal = false`, it stops | the terminal went away; a reload left a detached process |
+| a worker's health reason quoted the error from `?` | it says `error (the message is in the log)`; the log has the text | error text can quote URLs, queries, and responses |
+| key-vault 1.1 was accepted | key-vault 1.2 is required (`cargo update -p key-vault`) | a nested `Secret::with` panicked on 1.1 |
+
+A worker that wants a reason in its health report returns `Err(Failure::new("upstream refused the connection"))` instead of the converted error.
+
 ## After
 
 A service in one line:

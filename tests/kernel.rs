@@ -47,6 +47,7 @@ impl Root {
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();
+        make_private(&root);
         Root(root)
     }
 
@@ -68,6 +69,36 @@ impl Drop for Root {
     }
 }
 
+/// Makes `dir` owner-only on Windows (the current user, SYSTEM, and
+/// Administrators, nothing inherited), as the suite's own directories are.
+/// A machine's temporary folder can grant other accounts write access, and
+/// the file checks rightly refuse what is inside it (D-098).
+#[cfg(windows)]
+fn make_private(dir: &Path) {
+    let user = match (env::var("USERDOMAIN"), env::var("USERNAME")) {
+        (Ok(domain), Ok(user)) => format!("{domain}\\{user}"),
+        (_, Ok(user)) => user,
+        _ => panic!("USERNAME is not set"),
+    };
+    let status = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{user}:(OI)(CI)F"))
+        .args([
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "/grant:r",
+            "*S-1-5-32-544:(OI)(CI)F",
+        ])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "icacls failed on {}", dir.display());
+}
+
+#[cfg(not(windows))]
+fn make_private(_dir: &Path) {}
+
 fn write_private(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
     #[cfg(unix)]
@@ -75,6 +106,20 @@ fn write_private(path: &Path, text: &str) {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
+}
+
+/// Grants Everyone (`*S-1-1-0`) `rights` on `path` with icacls, as another
+/// user or a careless installer would leave a file (D-098).
+#[cfg(windows)]
+fn grant_everyone(path: &Path, rights: &str) {
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/grant")
+        .arg(format!("*S-1-1-0:({rights})"))
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "icacls failed on {}", path.display());
 }
 
 fn quiet(name: &str, root: &Root) -> Builder {
@@ -451,6 +496,38 @@ fn test_a_configuration_file_others_can_change_is_refused() {
         .unwrap();
     assert_eq!(error.kind(), ErrorKind::ConfigInsecure);
     assert!(!error.to_string().contains("limit"), "{error}");
+}
+
+#[cfg(windows)]
+#[test]
+fn test_a_configuration_file_others_can_change_is_refused_on_windows() {
+    // D-098: Everyone may write the file, as in a %ProgramData% folder.
+    let root = Root::new("insecurewin");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    grant_everyone(&file, "W");
+    let error = quiet("kernel-insecurewin", &root)
+        .config_file(&file)
+        .start()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::ConfigInsecure, "{error}");
+    assert!(error.to_string().contains("other accounts"), "{error}");
+    assert!(!error.to_string().contains("limit"), "{error}");
+}
+
+#[cfg(windows)]
+#[test]
+fn test_a_configuration_file_others_can_only_read_is_accepted_on_windows() {
+    // A configuration file may be readable by everyone, as on Unix (0644).
+    let root = Root::new("readablewin");
+    let file = root.write_config("[app]\nlimit = 1\n");
+    grant_everyone(&file, "R");
+    let system = quiet("kernel-readablewin", &root)
+        .config_file(&file)
+        .start()
+        .unwrap();
+    assert_eq!(system.config().get::<i64>("app.limit").unwrap(), Some(1));
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
 }
 
 #[cfg(feature = "config-toml")]
@@ -964,6 +1041,29 @@ fn test_disabled_secrets_still_refuse_references() {
     assert_eq!(error.kind(), ErrorKind::Secret, "{error}");
 }
 
+#[cfg(feature = "secrets")]
+#[test]
+fn test_disabled_secrets_refuse_references_on_reload_too() {
+    // D-100: the boot refused a reference with the member disabled; a reload
+    // must too, not read `env:PATH` as the literal text.
+    let root = Root::new("nosecretsreload");
+    let file = root.write_config("[db]\nhost = \"localhost\"\n");
+    let system = quiet("kernel-nosecretsreload", &root)
+        .config_file(&file)
+        .disable(Member::Secrets)
+        .start()
+        .unwrap();
+    write_private(&file, "[db]\nhost = \"env:PATH\"\n");
+    let error = system.reload().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::Secret, "{error}");
+    assert_eq!(system.config_snapshot().version(), 1);
+    assert_eq!(
+        system.config().get::<String>("db.host").ok().flatten(),
+        Some("localhost".to_owned())
+    );
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
 #[test]
 fn test_a_reload_with_a_bad_deadline_is_refused() {
     let root = Root::new("baddeadline");
@@ -1197,6 +1297,36 @@ fn test_t2_references_resolve_from_env_file_and_vault() {
 
 #[cfg(feature = "secrets")]
 #[test]
+fn test_t2_two_secrets_read_together() {
+    // D-100: a database login reads the user inside the password's read.
+    // key-vault 1.1 panicked here ("RefCell already borrowed"); 1.2 is
+    // required.
+    let root = Root::new("nested");
+    let user_file = root.path().join("db.user");
+    write_private(&user_file, "app");
+    let pass_file = root.path().join("db.pass");
+    write_private(&pass_file, "hunter2");
+    let config = format!(
+        "[db]\nuser = \"file:{}\"\npassword = \"file:{}\"\n",
+        user_file.display().to_string().replace('\\', "/"),
+        pass_file.display().to_string().replace('\\', "/")
+    );
+    let system = quiet("kernel-nested", &root)
+        .config_str(&config)
+        .start()
+        .unwrap();
+    let user = system.config().secret("db.user").unwrap();
+    let pass = system.config().secret("db.password").unwrap();
+    let total = user
+        .with(|u| pass.with(|p| u.len() + p.len()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(total, 10);
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+}
+
+#[cfg(feature = "secrets")]
+#[test]
 fn test_t2_unresolvable_references_name_the_key_never_a_value() {
     let root = Root::new("badrefs");
     let cases = [
@@ -1257,6 +1387,30 @@ fn test_t2_a_secret_file_others_can_read_is_refused() {
         .unwrap();
     assert_eq!(error.kind(), ErrorKind::Secret);
     assert!(error.action().contains("chmod 600"), "{}", error.action());
+}
+
+#[cfg(all(feature = "secrets", windows))]
+#[test]
+fn test_t2_a_secret_file_others_can_read_is_refused_on_windows() {
+    // D-098: a `file:` secret readable by Everyone was accepted before.
+    let root = Root::new("loosefilewin");
+    let secret_file = root.path().join("db.secret");
+    write_private(&secret_file, "hunter2");
+    grant_everyone(&secret_file, "R");
+    let error = quiet("kernel-loosewin", &root)
+        .config_str(format!(
+            "[db]\npassword = \"file:{}\"\n",
+            secret_file.display().to_string().replace('\\', "/")
+        ))
+        .start()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ErrorKind::Secret, "{error}");
+    assert!(
+        error.to_string().contains("read by other accounts"),
+        "{error}"
+    );
+    assert!(!format!("{error:?}").contains("hunter2"));
 }
 
 #[cfg(feature = "secrets")]
@@ -1379,6 +1533,20 @@ fn test_t3_the_audit_chain_and_anchor_are_owner_only() {
         0,
         "anchor directory"
     );
+}
+
+#[cfg(all(feature = "audit", windows))]
+#[test]
+fn test_t3_an_audit_chain_others_can_change_is_refused_on_windows() {
+    // D-098: the chain is checked like the configuration.
+    let root = Root::new("auditloosewin");
+    let system = quiet("kernel-auditloosewin", &root).start().unwrap();
+    assert_eq!(system.shutdown(), ExitCode::SUCCESS);
+    let chain = audit_file(&root, "kernel-auditloosewin");
+    grant_everyone(&chain, "W");
+    let error = quiet("kernel-auditloosewin", &root).start().err().unwrap();
+    assert_eq!(error.kind(), ErrorKind::ConfigInsecure, "{error}");
+    assert!(error.to_string().contains("audit chain"), "{error}");
 }
 
 #[cfg(all(feature = "audit", unix))]

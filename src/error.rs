@@ -76,6 +76,13 @@ impl Error {
         }))
     }
 
+    /// The same error, of `kind` instead.
+    #[cfg(all(windows, feature = "secrets"))]
+    pub(crate) fn with_kind(mut self, kind: ErrorKind) -> Self {
+        self.0.kind = kind;
+        self
+    }
+
     /// Records the boot step (and its member) unless one is already set.
     pub(crate) fn at(mut self, step: Step) -> Self {
         if self.0.step.is_none() {

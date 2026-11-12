@@ -35,7 +35,10 @@ pub(crate) mod sections;
 #[cfg_attr(docsrs, doc(cfg(feature = "secrets")))]
 pub use crate::secrets::Secret;
 
-/// config-lib, the configuration backend (D-034).
+/// config-lib, the configuration backend (D-034). Its own loaders read a
+/// file without the suite's checks (owner, permissions, size, regular
+/// file, strict parse); load configuration through the system, and use
+/// this module for its types (D-101).
 pub use config_lib as backend;
 
 /// An immutable snapshot of the configuration.

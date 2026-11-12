@@ -149,7 +149,8 @@ pub(crate) fn find(search: &Search<'_>) -> Result<(Source, Origin), Error> {
     }
     if let Some(value) = search.env_file_value.as_deref().filter(|v| !v.is_empty()) {
         let path = PathBuf::from(value);
-        return Ok((Source::File(must_exist(&path, &variable)?), Origin::EnvFile));
+        let named_by = format!("{variable} or CONFIG in the .env file");
+        return Ok((Source::File(must_exist(&path, &named_by)?), Origin::EnvFile));
     }
     if let Some(dir) = search.config_dir
         && let Some(path) = single_in(dir, search.name)?
@@ -341,22 +342,20 @@ pub(crate) fn io_error(path: &Path, what: &str, error: &std::io::Error) -> Error
 /// Without the `secrets` feature, a secret reference (`env:`, `file:`,
 /// `vault:`) is refused, so it is never mistaken for a literal (D-025,
 /// D-031).
-#[cfg_attr(feature = "secrets", allow(dead_code))]
 pub(crate) fn refuse_references(config: &Config) -> Result<(), Error> {
     let root = config.backend().as_value();
     match find_reference(root, &mut Vec::new()) {
         Some(key) => Err(Error::new(
             ErrorKind::Secret,
             format!(
-                "the configuration key `{key}` holds a secret reference, which needs the `secrets` feature"
+                "the configuration key `{key}` holds a secret reference, and the secrets member is off"
             ),
-            "turn on the suite's `secrets` feature, or put the value in the file directly",
+            "turn on the suite's `secrets` feature and leave Member::Secrets enabled, or put the value in the file directly",
         )),
         None => Ok(()),
     }
 }
 
-#[cfg_attr(feature = "secrets", allow(dead_code))]
 fn find_reference(value: &config_lib::Value, path: &mut Vec<String>) -> Option<String> {
     match value {
         config_lib::Value::String(text)
@@ -398,6 +397,7 @@ mod tests {
             std::env::temp_dir().join(format!("system-suite-load-{label}-{}", std::process::id()));
         drop(fs::remove_dir_all(&dir));
         fs::create_dir_all(&dir).ok();
+        crate::secure_file::make_private_for_tests(&dir);
         dir
     }
 

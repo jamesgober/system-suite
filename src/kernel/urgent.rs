@@ -461,16 +461,29 @@ impl UrgentLine {
 /// copied to each (D-089).
 pub(crate) const MAX_REASON: usize = 256;
 
-/// `reason`, cut to [`MAX_REASON`] bytes on a character boundary.
+/// `reason`, cut to [`MAX_REASON`] bytes on a character boundary. Also
+/// the cap on every health reason (D-100).
 pub(crate) fn cap_reason(reason: Cow<'static, str>) -> Cow<'static, str> {
     if reason.len() <= MAX_REASON {
         return reason;
     }
-    let mut end = MAX_REASON;
-    while !reason.is_char_boundary(end) {
+    match reason {
+        Cow::Borrowed(text) => Cow::Borrowed(cut(text, MAX_REASON)),
+        Cow::Owned(text) => Cow::Owned(cut(&text, MAX_REASON).to_owned()),
+    }
+}
+
+/// The longest prefix of `text` that fits in `max` bytes and ends on a
+/// character boundary. No allocation.
+pub(crate) fn cut(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
         end -= 1;
     }
-    Cow::Owned(reason[..end].to_owned())
+    &text[..end]
 }
 
 std::thread_local! {

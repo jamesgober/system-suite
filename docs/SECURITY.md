@@ -36,7 +36,7 @@ What the suite defends against, how, what each defence costs, and the test that 
 
 | Defence | Cost | Since |
 |---|---|---|
-| a configuration or `.env` file another user can change is refused, checked on the opened file (no switch accepts it) | one `fstat` | 0.4 (D-020, D-048, D-049) |
+| a configuration or `.env` file another user can change is refused, checked on the opened file (no switch accepts it); on Windows by the opened file's owner and access control list since 0.9.0 | one `fstat`; on Windows one `GetSecurityInfo` and one volume query, 9.8 µs median, 20.7 µs p95 (measured on Windows, release build) | 0.4 (D-020, D-048, D-049); Windows 0.9.0 (D-098) |
 | a configuration parse error names the position only, never the text | none | 0.4 |
 | unknown keys in the suite's sections refused, so a typo cannot keep an insecure default | none | 0.4 |
 | a working-directory configuration file is ignored when the process is elevated | one check at boot | 0.4 |
@@ -45,9 +45,9 @@ What the suite defends against, how, what each defence costs, and the test that 
 | the audit chain's tail is anchored outside the file, so a shortened or replaced chain is refused | one small owner-only write per sync, one read at boot | 0.7 (D-072) |
 | the `.env` file is read by the suite and checked on the opened file, so the file checked is the file read | none measurable (one `fstat`) | 0.7 (D-073) |
 | the configuration and `.env` files must be regular files, checked before opening, so a FIFO cannot block the boot | one `stat` | 0.7 (D-078) |
-| an existing audit chain file another user can change is refused before it is resumed | one `fstat` at boot | 0.7 (D-078) |
+| an existing audit chain file another user can change is refused before it is resumed (Windows: owner and access control list since 0.9.0) | one `fstat` at boot | 0.7 (D-078) |
 | a panicking signal handler does not end the signal intake; reloads and dumps run off the signal thread | one short-lived thread per reload or dump | 0.7 (D-075) |
-| no secret outlives the shutdown: a reload that finishes after the vault was wiped has its values removed at once | one atomic load per reload | 0.7 (D-077) |
+| no configuration secret outlives the shutdown: a reload that finishes after the vault was wiped has its values removed at once (keys the application registered itself in `on_vault` stay until the last `Foundation` clone drops; see `Foundation::vault`) | one atomic load per reload | 0.7 (D-077) |
 | a `Lockdown` is lowered only by naming it (`shift`), and lifting one is audited | none | 0.8 (D-084) |
 | a JSON configuration with a repeated key is refused (which value the operator meant is a guess), and its depth and size are budgeted before memory is allocated; a parse error names the line and column, never the text | none beyond the parse | 0.8 (D-090) |
 | an audit field holding the chain's field separator (`0x1f`) is recorded with U+FFFD in its place, so text from a request cannot keep its record out of the chain, and the hashed fields stay unambiguous (audit-trail 1.2) | one scan of each field, no allocation unless the byte is there | 0.8 (D-090) |
@@ -58,11 +58,18 @@ What the suite defends against, how, what each defence costs, and the test that 
 | a TOML or NOML file cannot pull in another file (`include`) or the environment (`env()`): config-lib 1.3's strict parse refuses both with a position, so every value comes from the one file that passed the owner, mode, size, and regular-file checks | about 12 µs on a 4 KiB NOML file | 0.8.1 (D-094) |
 | secrets inside lists are checked like any other: a plain value under a secret-looking key in a list's table is refused, and so is a reference anywhere in a list | none (the same walk) | 0.8.1 (D-094) |
 | a configuration that spells one key twice, nested and with a dot in a key, is refused (a lookup would answer differently depending on which exists), and a dotted top-level key for a suite section (`kernel.notify = false`) is refused instead of silently ignored | one walk of the keys at parse | 0.8.1 (D-094) |
-| a parser that panics on a file refuses the file; a subsystem whose `health` panics is reported `Unhealthy`, at boot as later; a panicking reload or dump run does not stop later signals | none | 0.8.1 (D-094) |
+| a parser that panics on a file refuses the file; a subsystem whose `health` panics is reported `Unhealthy`, at boot as later; a panicking reload or dump run does not stop later signals. These need `panic = "unwind"`: under `panic = "abort"` (the release profile the suite recommends) a panic ends the process, after the crash report, so a parser panic during a reload stops the service | none | 0.8.1 (D-094) |
 | a `file:` secret, the audit chain, and its anchor must be regular files, checked before opening, and the anchor is read only to 4 KiB | one `stat` each | 0.8.1 (D-094) |
 | each audit field is cut to 4 KiB at a character boundary, so request text cannot make one record megabytes long; a record appended but not synced is reported as such, so it is not recorded twice | none | 0.8.1 (D-094) |
 | cancelled timers are swept when the table has doubled, so cancelling and re-arming holds about twice the live timers | O(1) per timer armed, amortized | 0.8.1 (D-094) |
 | a slow audit disk cannot take the subsystems' time at shutdown: the stop record is written through to the operating system at step 1 and synced at step 5, and step 1 is bounded by the subsystems' share; a power loss before step 5 loses that one record | one sync fewer per stop | 0.8.1 (D-095) |
+| on Windows the configuration, `.env`, secret, and audit-chain files are checked on the opened file like on Unix: the owner must be the service's account, SYSTEM, or Administrators, no other account may change it, and no other account may read a secret file. A missing system-wide configuration directory is created owner-only before a standard user can make it theirs (`%ProgramData%` lets every user create folders) | one `GetSecurityInfo` and one volume query per file at boot and reload, 9.8 µs median, 20.7 µs p95 (measured on Windows, release build) | 0.9.0 (D-098) |
+| a logoff on Windows never stops a service (any user's logoff did before); SIGHUP at a terminal stops instead of leaving a detached process that holds the lock | none | 0.9.0 (D-099) |
+| a health reason is at most 256 bytes, and error text stays out of it: a worker's reason is its `Failure::new` message, an error converted with `?` and a panic show only that the message is in the log (which keeps up to 4 KiB of it) | one copy of at most 256 bytes per failure | 0.9.0 (D-100) |
+| a reload refuses a secret reference while the secrets member is disabled, as the boot does, so `env:NAME` is never read as the literal text | one walk of the keys per reload | 0.9.0 (D-100) |
+| crash reports are capped across starts: after each report the oldest are removed until `[crash] max_reports` are left | one directory listing per crash | 0.9.0 (D-100) |
+| the systemd keep-alive runs on its own thread, so a slow timer callback cannot get a healthy service killed | one parked thread, one wake-up per period | 0.9.0 (D-100) |
+| key-vault 1.2 is required (a nested `Secret::with` panicked on 1.1), and a secret the OS could not page-lock is reported at boot | one pass over the vault's keys at boot | 0.9.0 (D-100) |
 
 ## Known limits
 
@@ -77,7 +84,10 @@ Each is recorded with its reason in the decision log (D-079).
 | event handlers run on the thread that tears down, outside the shutdown deadline | they are the application's code and must return quickly; bounding each would cost a thread per event |
 | a file checked as regular and then opened can be swapped for a FIFO between the two calls, which blocks that open | only a user who can write the directory can swap it, and the directory checks already make that the owner, who can change the configuration anyway; opening without blocking needs a flag per OS, which belongs in a member |
 | a shutdown step runs on the calling thread, without its deadline, when the OS refuses a thread | skipping the step would lose the log's last lines or the audit sync; an OS that refuses one small thread is already failing |
-| on Windows the file checks rely on the directory's access control list, which is set owner-only when the suite creates it | reading a file's access control list needs OS calls the suite does not make itself |
+| on Windows a file on a volume that keeps no access control lists (FAT, exFAT, some network shares) is accepted unchecked | anyone with the volume can change any file on it, so a refusal would only break portable installs on such drives; the system-wide directory (`%ProgramData%`) is always on NTFS |
+| the audit chain is checked on one descriptor and opened again by audit-trail, which checks its own descriptor for other users' write access but not its owner | the owner check needs audit-trail to take the checked file, or check the owner itself (recorded in `dev/ROADMAP.md`) |
+| keys the application registers in its `on_vault` callback stay in the vault after shutdown step 7, until the last `Foundation` clone drops | removing them needs a key-vault call that lists or clears its keys (recorded in `dev/ROADMAP.md`); configuration secrets are removed at step 7 |
+| the defences that catch a panic (a parser, a `health` check, a reload commit) need `panic = "unwind"`; under `panic = "abort"` the panic ends the process after the crash report | the profile is the application's choice; the crash report and the log still record the panic |
 
 ## Reporting a vulnerability
 

@@ -22,12 +22,17 @@ What differs between Linux, macOS, and Windows. CI runs every test on all three,
 
 | Event | Linux and macOS | Windows |
 |---|---|---|
-| stop | SIGTERM, SIGINT, SIGQUIT | Ctrl+C, Ctrl+Break, console close, logoff, system shutdown; as a service: stop, shutdown, preshutdown |
-| reload | SIGHUP | as a service: parameter change (`sc control <name> paramchange`) |
+| stop | SIGTERM, SIGINT, SIGQUIT; SIGHUP when the process runs at a terminal with no service manager, or with `[kernel] reload_signal = false` | Ctrl+C, Ctrl+Break, console close; as a service: stop, shutdown, preshutdown |
+| reload | SIGHUP under a service manager, or with no terminal | as a service: parameter change (`sc control <name> paramchange`) |
+| ignored | | logoff, and the console's system-shutdown event (a service stops on the service manager's shutdown control instead) |
 | dump | SIGUSR1 | as a service: user control code 128 (`sc control <name> 128`) |
 | after shutdown step 8 | the OS default action | the OS default action |
 
-On Windows, logoff and system shutdown arrive as signal-mod's `Hangup`, so there `Hangup` stops the process; on Unix SIGHUP reloads. A console process cannot receive Ctrl+C from another process group; Ctrl+Break reaches the same handler.
+On Windows, logoff and system shutdown arrive as signal-mod's `Hangup`, and only a service receives them. A logoff means that some user, any user, signed out, so the suite receives the event and ignores it: before 0.9.0 it stopped every service on the machine whenever anyone logged off (D-099). A service learns of a machine shutdown from the service manager's shutdown and preshutdown controls, which stop it as before.
+
+On Unix SIGHUP reloads under a service manager. At a terminal (standard input or error is a terminal, and `INVOCATION_ID`, `NOTIFY_SOCKET` and `XPC_SERVICE_NAME` are unset) it means the terminal went away, so it stops the process: a reload would leave a detached process holding the single-instance lock (D-099). With `[kernel] reload_signal = false` SIGHUP also stops, its default meaning.
+
+SIGQUIT is a graceful stop, as nginx treats it, not a core dump; send SIGABRT (`kill -ABRT <pid>`) for a core of a hung process. A console process cannot receive Ctrl+C from another process group; Ctrl+Break reaches the same handler.
 
 ## Running as a service
 

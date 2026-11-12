@@ -144,7 +144,12 @@ impl Reloader {
         #[cfg(feature = "secrets")]
         let staged = match &self.secrets {
             Some(state) => Some(state.stage(&config, new_sections.secrets.allow_plain, version)?),
-            None => None,
+            None => {
+                // The secrets member is disabled: a reference is refused,
+                // as at boot, so it is never read as a literal (D-100).
+                load::refuse_references(&config)?;
+                None
+            }
         };
 
         // Phase one: every subsystem prepares; any refusal changes nothing.

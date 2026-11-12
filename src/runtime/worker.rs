@@ -242,16 +242,27 @@ where
     loop {
         shared.set_state(WorkerState::Running);
         let outcome = panic::catch_unwind(AssertUnwindSafe(|| run(cx)));
+        // Two texts per failure (D-100): the log gets the message (capped),
+        // health gets only what the application chose to show.
         let failure = match outcome {
             Ok(Ok(())) => None,
-            Ok(Err(failure)) => Some(failure.message().to_owned()),
-            Err(payload) => Some(panic_text(payload.as_ref())),
+            Ok(Err(failure)) => Some(Reason {
+                log: crate::kernel::urgent::cut(failure.message(), MAX_LOGGED).to_owned(),
+                health: crate::kernel::urgent::cut(failure.public_text(), MAX_SHOWN).to_owned(),
+            }),
+            Err(payload) => {
+                let text = panic_text(payload.as_ref());
+                Some(Reason {
+                    log: text.clone(),
+                    health: text,
+                })
+            }
         };
         if cx.should_stop() {
             break;
         }
         let reason = match (failure, policy.restart) {
-            (None, Restart::Always) => "returned; restarting (Restart::Always)".to_owned(),
+            (None, Restart::Always) => Reason::both("returned; restarting (Restart::Always)"),
             (None, _) => break,
             (Some(reason), Restart::Never) => {
                 give_up(cx, reason);
@@ -276,12 +287,12 @@ where
         *shared
             .last_failure
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(reason.clone());
+            .unwrap_or_else(PoisonError::into_inner) = Some(reason.health);
         let attempt = shared.restarts.fetch_add(1, Ordering::AcqRel);
         cx.runtime.emit(Event::WorkerRestarted {
             name: shared.name.to_string(),
             restarts: attempt + 1,
-            reason,
+            reason: reason.log,
         });
         shared.set_state(WorkerState::BackingOff);
         // A delay too long to add to now (`Duration::MAX`) waits until the
@@ -310,19 +321,43 @@ where
     shared.finish();
 }
 
-fn give_up(cx: &WorkerContext, reason: String) {
+fn give_up(cx: &WorkerContext, reason: Reason) {
     let shared = &cx.shared;
     *shared
         .last_failure
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(reason.clone());
+        .unwrap_or_else(PoisonError::into_inner) = Some(reason.health);
     shared.set_state(WorkerState::Failed);
     shared.finish();
     cx.runtime.emit(Event::WorkerFailed {
         name: shared.name.to_string(),
         critical: shared.critical,
-        reason,
+        reason: reason.log,
     });
+}
+
+/// The longest failure message logged, in bytes: one failing worker must
+/// not write megabytes per restart.
+const MAX_LOGGED: usize = 4096;
+
+/// The longest failure text kept for health; [`Health`] caps it again.
+const MAX_SHOWN: usize = 256;
+
+/// Why a worker failed, once for the log and once for health (D-100).
+struct Reason {
+    /// The message, for the log and the runtime's events.
+    log: String,
+    /// What a health report may show.
+    health: String,
+}
+
+impl Reason {
+    fn both(text: &str) -> Reason {
+        Reason {
+            log: text.to_owned(),
+            health: text.to_owned(),
+        }
+    }
 }
 
 /// The reason recorded for a panic. Not the payload: health reports are
@@ -707,6 +742,51 @@ mod tests {
                 .is_some_and(|h| wait_for(h, WorkerState::Failed))
         );
         assert_eq!(handle.map(|h| h.health().status()), Some(Status::Unhealthy));
+    }
+
+    #[test]
+    fn test_a_converted_error_stays_out_of_health() {
+        // D-100: an error's text (a URL with a key in it, here) goes to the
+        // log only; health shows a fixed text.
+        let rt = runtime();
+        let handle = Worker::new("charge")
+            .restart(Restart::Never)
+            .spawn(&rt, |_| {
+                Err(std::io::Error::other(
+                    "error sending request for url (https://api.example.com/v1/charge?api_key=sk_live_hunter2)",
+                ))?
+            })
+            .ok();
+        assert!(
+            handle
+                .as_ref()
+                .is_some_and(|h| wait_for(h, WorkerState::Failed))
+        );
+        let reason = handle
+            .and_then(|h| h.health().reason().map(str::to_owned))
+            .unwrap_or_default();
+        assert!(!reason.contains("api_key"), "{reason}");
+        assert_eq!(reason, "failed: error (the message is in the log)");
+    }
+
+    #[test]
+    fn test_a_long_failure_message_is_capped_in_health() {
+        // D-100: a 1 MiB message must not make every health report 1 MiB.
+        let rt = runtime();
+        let handle = Worker::new("long")
+            .restart(Restart::Never)
+            .spawn(&rt, |_| Err(Failure::new("é".repeat(512 * 1024))))
+            .ok();
+        assert!(
+            handle
+                .as_ref()
+                .is_some_and(|h| wait_for(h, WorkerState::Failed))
+        );
+        let reason = handle
+            .and_then(|h| h.health().reason().map(str::to_owned))
+            .unwrap_or_default();
+        assert!(reason.starts_with("failed: é"));
+        assert!(reason.len() <= 256, "{}", reason.len());
     }
 
     #[test]

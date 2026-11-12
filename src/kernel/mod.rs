@@ -35,7 +35,7 @@ pub(crate) mod metrics;
 pub(crate) mod notify;
 #[cfg(feature = "signals")]
 pub(crate) mod signals;
-mod urgent;
+pub(crate) mod urgent;
 
 #[cfg(feature = "registry")]
 pub use events::{Event, EventGuard, Events};

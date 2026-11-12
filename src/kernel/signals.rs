@@ -31,6 +31,8 @@ pub(crate) struct Actions {
     reload: OnceLock<Reload>,
     dump_on: bool,
     reload_on: bool,
+    /// Unix: SIGHUP stops instead of reloading (see [`hangup_stops`]).
+    hangup_stops: bool,
 }
 
 /// The installed intake: the coordinator and its thread.
@@ -43,8 +45,11 @@ pub(crate) struct SignalIntake {
 impl SignalIntake {
     /// Installs the intake. Stop signals request a stop; on Unix, SIGHUP
     /// (reload) and SIGUSR1 (dump) are received without stopping. With
-    /// `[kernel] reload_signal` or `dump_signal` off they are still
-    /// received (their default action would end the process) and ignored.
+    /// `[kernel] dump_signal` off SIGUSR1 is still received (its default
+    /// action would end the process) and ignored. SIGHUP stops the process
+    /// instead of reloading when `[kernel] reload_signal` is off, or when
+    /// the process runs at a terminal with no service manager (the
+    /// terminal went away; see [`hangup_stops`]).
     pub(crate) fn install(
         kernel: Kernel,
         log: LogSlot,
@@ -69,6 +74,7 @@ impl SignalIntake {
         let actions = Arc::new(Actions {
             reload_on,
             dump_on,
+            hangup_stops: hangup_stops(reload_on, at_terminal(), under_service_manager()),
             ..Actions::default()
         });
         let thread_actions = Arc::clone(&actions);
@@ -133,7 +139,8 @@ impl SignalIntake {
 
 fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, actions: &Actions) {
     let name = signal_name(signal);
-    if stop.contains(signal) {
+    let hangup_stop = cfg!(unix) && signal == Signal::Hangup && actions.hangup_stops;
+    if stop.contains(signal) || hangup_stop {
         if kernel.stop_for(StopReason::Signal { name }) {
             log.info("stop requested", &[("signal", Val::Str(name))]);
         } else {
@@ -170,6 +177,14 @@ fn handle(signal: Signal, stop: SignalSet, kernel: &Kernel, log: &LogSlot, actio
                 &[("signal", Val::Str(name))],
             ),
         },
+        // Windows: a user logged off, or the machine is shutting down. Only
+        // a service receives these, and a service stops on the service
+        // manager's shutdown control, so a logoff must not stop it (D-099).
+        #[cfg(windows)]
+        Signal::Hangup => log.info(
+            "logoff or shutdown event ignored: a service stops on the service manager's shutdown control",
+            &[("signal", Val::Str(name))],
+        ),
         _ => log.warn("unexpected signal ignored", &[("signal", Val::Str(name))]),
     }
 }
@@ -182,10 +197,38 @@ const RELOAD: Signal = Signal::Hangup;
 #[cfg(not(unix))]
 const RELOAD: Signal = Signal::User2;
 
+/// Whether SIGHUP stops the process instead of reloading it (Unix).
+///
+/// Under a service manager SIGHUP means "reload". At a terminal it means
+/// the terminal went away: reloading would leave a detached process that
+/// still holds the single-instance lock. With `reload_signal` off nothing
+/// else would act on it, so it keeps its default meaning, stop.
+fn hangup_stops(reload_on: bool, at_terminal: bool, service_manager: bool) -> bool {
+    !reload_on || (at_terminal && !service_manager)
+}
+
+/// Standard input or standard error is a terminal.
+fn at_terminal() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal() || std::io::stderr().is_terminal()
+}
+
+/// A service manager started the process: systemd sets `INVOCATION_ID`
+/// for every unit and `NOTIFY_SOCKET` for `Type=notify`, launchd sets
+/// `XPC_SERVICE_NAME`.
+fn under_service_manager() -> bool {
+    ["INVOCATION_ID", "NOTIFY_SOCKET", "XPC_SERVICE_NAME"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty() && v != "0"))
+}
+
 /// The stop and notify sets for this OS.
 ///
-/// On Windows signal-mod reports logoff and system shutdown as `Hangup`, so
-/// there it stops the process; on Unix SIGHUP is the reload signal.
+/// On Unix SIGHUP is the reload signal. On Windows signal-mod reports
+/// logoff and system shutdown as `Hangup`. It is received (so no default
+/// handler ends the process) but never stops it: any user logging off
+/// would stop every service (D-099), and a service learns of a shutdown from
+/// the service manager's shutdown control, which arrives as `Terminate`.
 #[cfg(unix)]
 fn signal_sets() -> (SignalSet, SignalSet) {
     let stop = SignalSet::empty()
@@ -201,11 +244,14 @@ fn signal_sets() -> (SignalSet, SignalSet) {
     let stop = SignalSet::empty()
         .with(Signal::Terminate)
         .with(Signal::Interrupt)
-        .with(Signal::Quit)
+        .with(Signal::Quit);
+    // Only the service control manager produces User1 and User2 on
+    // Windows: user control code 128 (dump) and parameter change (reload).
+    // Hangup (logoff, shutdown) reaches services only; see above.
+    let notify = SignalSet::empty()
+        .with(Signal::User1)
+        .with(Signal::User2)
         .with(Signal::Hangup);
-    // Only the service control manager produces these on Windows: user
-    // control code 128 (dump) and parameter change (reload).
-    let notify = SignalSet::empty().with(Signal::User1).with(Signal::User2);
     (stop, notify)
 }
 
@@ -257,7 +303,41 @@ mod tests {
             assert!(notify.contains(Signal::Hangup));
             assert!(notify.contains(Signal::User1));
         } else {
-            assert!(stop.contains(Signal::Hangup));
+            // D-099: a logoff (Hangup) must not stop a Windows service.
+            assert!(!stop.contains(Signal::Hangup));
+            assert!(notify.contains(Signal::Hangup));
+        }
+    }
+
+    #[test]
+    fn test_hangup_stops_only_at_a_terminal_or_with_reload_off() {
+        // reload_on, at_terminal, service_manager
+        assert!(!hangup_stops(true, false, false));
+        assert!(!hangup_stops(true, false, true));
+        assert!(!hangup_stops(true, true, true));
+        assert!(hangup_stops(true, true, false));
+        assert!(hangup_stops(false, false, true));
+        assert!(hangup_stops(false, true, false));
+    }
+
+    #[test]
+    fn test_handle_hangup_stops_when_marked() {
+        let kernel = Kernel::new();
+        let (stop, _) = signal_sets();
+        let actions = Actions {
+            reload_on: true,
+            hangup_stops: true,
+            ..Actions::default()
+        };
+        handle(Signal::Hangup, stop, &kernel, &LogSlot::default(), &actions);
+        if cfg!(unix) {
+            assert_eq!(
+                kernel.stop_reason(),
+                Some(StopReason::Signal { name: "SIGHUP" })
+            );
+        } else {
+            // Windows: logoff and shutdown never stop (D-099).
+            assert_eq!(kernel.stop_reason(), None);
         }
     }
 

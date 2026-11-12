@@ -233,10 +233,17 @@ impl Resolved {
                         }
                         Err(e) => {
                             table.retire();
+                            // Only a lock failure is about memory limits (D-100).
+                            let action = match e {
+                                key_vault::Error::MemoryLock(_) => {
+                                    "check the process's memory limits (RLIMIT_MEMLOCK; on Windows the working-set size)"
+                                }
+                                _ => "check the secret's value",
+                            };
                             return Err(secret_error(
                                 &path,
                                 &format!("could not be stored in the vault: {e}"),
-                                "check the process's memory limits (RLIMIT_MEMLOCK)",
+                                action,
                             ));
                         }
                     }
@@ -469,7 +476,17 @@ fn from_file(path: &str, file: &Path) -> Result<RawKey, Error> {
             "a secret file holds one secret; check the path",
         ));
     }
-    Ok(strip_newline(raw))
+    let raw = strip_newline(raw);
+    if raw.expose_secret().is_empty() {
+        // An empty file (`echo > file`, or a mount not populated yet) is
+        // refused here, with its own message (D-100).
+        return Err(secret_error(
+            path,
+            &format!("names the file {}, which is empty", file.display()),
+            "write the secret into the file",
+        ));
+    }
+    Ok(raw)
 }
 
 /// One trailing `\n` (or `\r\n`) removed, as editors and `echo` add it.
@@ -584,6 +601,27 @@ mod tests {
         let error = from_file("db.password", &dir).err();
         assert_eq!(error.as_ref().map(Error::kind), Some(ErrorKind::Secret));
         assert!(error.is_some_and(|e| e.to_string().contains("not a regular file")));
+    }
+
+    #[test]
+    fn test_an_empty_secret_file_says_so() {
+        // D-100: `echo > file` leaves only a newline; the error must name
+        // the empty file, not the memory-lock limit.
+        let dir = std::env::temp_dir().join(format!("ss-empty-secret-{}", std::process::id()));
+        let _made = fs::create_dir_all(&dir);
+        crate::secure_file::make_private_for_tests(&dir);
+        let file = dir.join("db_password");
+        assert!(fs::write(&file, "\n").is_ok());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert!(fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).is_ok());
+        }
+        let error = from_file("db.password", &file).err();
+        let _removed = fs::remove_dir_all(&dir);
+        let error = error.map(|e| format!("{e:?}")).unwrap_or_default();
+        assert!(error.contains("which is empty"), "{error}");
+        assert!(!error.contains("RLIMIT_MEMLOCK"), "{error}");
     }
 
     #[test]

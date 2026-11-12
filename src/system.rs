@@ -179,6 +179,16 @@ impl Foundation {
     /// The vault (boot step 8): the configuration's resolved secrets and
     /// the keys registered in `on_vault`. Read secrets through
     /// [`Config::secret`](crate::config::Config::secret).
+    ///
+    /// The system's vault stores the original bytes: BLAKE3 normalization
+    /// is off, unlike a vault from `vault::KeyVaultBuilder`'s defaults, so
+    /// the same key registered here and in a vault of the application's
+    /// own reads back differently there. Shutdown step 7 removes the
+    /// configuration's secrets. Keys the application registered itself
+    /// (in `on_vault` or later) are not removed at step 7: they are wiped
+    /// when the last `Foundation` clone drops, so a process that keeps
+    /// running after a shutdown should drop its clones, or unregister its
+    /// keys before it shuts down.
     #[cfg(feature = "secrets")]
     #[must_use]
     pub fn vault(&self) -> &key_vault::KeyVault {

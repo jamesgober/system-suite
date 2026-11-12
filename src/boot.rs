@@ -508,9 +508,14 @@ impl Parts {
     /// (`WATCHDOG_USEC`, for this process): `WATCHDOG=1` at half the
     /// interval while the system is not `Unhealthy`, so a wedged process
     /// is restarted, and `STATUS=` when the status changes (D-030).
+    ///
+    /// On a worker thread of its own, not the timer thread: a slow timer
+    /// callback (an application's, or an `fsync` on a stalled disk) must
+    /// not hold back the keep-alive of a healthy service (D-100). It costs
+    /// one parked thread and one wake-up per period.
     #[cfg(feature = "kernel")]
     pub(crate) fn start_watchdog(&self) {
-        use crate::kernel::Status;
+        use crate::{kernel::Status, runtime::Worker};
 
         if !self.settings.process_wide || !self.sections.kernel.notify {
             return;
@@ -519,11 +524,10 @@ impl Parts {
             return;
         };
         let kernel = self.kernel.clone();
-        let mut last = Status::Healthy;
-        let started = self
-            .kernel
-            .runtime()
-            .every("systemd-watchdog", period, move || {
+        let started = Worker::new("systemd-watchdog").spawn(self.kernel.runtime(), move |cx| {
+            let mut last = Status::Healthy;
+            let mut next = std::time::Instant::now();
+            while !cx.should_stop() {
                 let status = kernel.status();
                 // A failed keep-alive is not logged: at this rate it would
                 // flood the log, and systemd reports the missed keep-alive.
@@ -534,7 +538,17 @@ impl Parts {
                 if status != Status::Unhealthy {
                     let _sent = crate::kernel::notify::notify("WATCHDOG=1");
                 }
-            });
+                next = next.checked_add(period).unwrap_or(next);
+                loop {
+                    let left = next.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() || cx.should_stop() {
+                        break;
+                    }
+                    cx.park(Some(left));
+                }
+            }
+            Ok(())
+        });
         if let Err(error) = started {
             self.log.warn(
                 "the systemd keep-alive could not be started",
@@ -944,7 +958,19 @@ fn step_configuration(parts: &mut Parts) -> Result<(), Error> {
         parts
             .env
             .as_ref()
-            .and_then(|env| env.get("CONFIG").map(|value| value.into_owned()))
+            // `<NAME>_CONFIG=` as in the process environment, or plain
+            // `CONFIG=`; the prefixed form wins when both are there (D-100).
+            .and_then(|env| {
+                // The file's own keys, as written: env-lib's `get` strips
+                // its prefix from a name, so it cannot tell them apart.
+                let prefixed = format!("{prefix}_CONFIG");
+                let value_of = |name: &str| {
+                    env.iter()
+                        .find(|(key, _)| *key == name)
+                        .map(|(_, value)| value.to_owned())
+                };
+                value_of(&prefixed).or_else(|| value_of("CONFIG"))
+            })
     } else {
         None
     };
@@ -958,6 +984,20 @@ fn step_configuration(parts: &mut Parts) -> Result<(), Error> {
         .app
         .as_ref()
         .map(|app| app.dir(path_lib::Kind::Config).to_path_buf());
+    // Windows, system-wide: %ProgramData% lets every local user create
+    // folders and files, so a missing configuration directory is created
+    // owner-only (the service's account, SYSTEM, Administrators) before a
+    // standard user can make it theirs (D-098). An empty directory is
+    // the one thing made before the guard; a second copy creating it too
+    // changes nothing. A failure leaves the file checks as the defence.
+    #[cfg(windows)]
+    if !disabled
+        && let Some(app) = parts.app.as_ref()
+        && app.scope() == path_lib::Scope::Global
+        && config_dir.as_deref().is_some_and(|dir| !dir.exists())
+    {
+        let _private = app.ensure_private(path_lib::Kind::Config);
+    }
     let (source, origin) = if disabled {
         (Source::Defaults, load::Origin::NotFound)
     } else {
@@ -1335,6 +1375,21 @@ fn first_lines(parts: &Parts) {
                     .log
                     .warn("guard", &[("warning", Val::Str(&format!("{warning:?}")))]);
             }
+        }
+    }
+    // A secret the OS could not page-lock may be written to swap. The
+    // secrets step (8) runs before logging (10), so it is reported here.
+    #[cfg(feature = "secrets")]
+    if let Some(secrets) = &parts.secrets {
+        let status = secrets.vault().memory_status();
+        if !status.all_locked() {
+            parts.log.warn(
+                "some secrets are not page-locked; the OS may write them to swap (raise RLIMIT_MEMLOCK, or the working-set size on Windows)",
+                &[
+                    ("unlocked", Val::U64(status.unlocked() as u64)),
+                    ("secrets", Val::U64(status.keys as u64)),
+                ],
+            );
         }
     }
     parts.log_timeline();

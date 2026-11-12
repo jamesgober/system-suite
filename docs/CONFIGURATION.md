@@ -22,7 +22,7 @@ Every key the suite reads, with its type, default, and what it does. Every secti
 
 | | |
 |---|---|
-| Where | the first that applies: `Builder::config_file` or `config_str`; the file named by `<NAME>_CONFIG` (process environment, then the `.env` file); `<config dir>/<name>.conf`; `./<name>.conf` when the process is not elevated |
+| Where | the first that applies: `Builder::config_file` or `config_str`; the file named by `<NAME>_CONFIG` in the process environment, then by `<NAME>_CONFIG=` or `CONFIG=` in the `.env` file (the prefixed name wins when both are there); `<config dir>/<name>.conf`; `./<name>.conf` when the process is not elevated |
 | Format | config-lib's `conf`: `[section]` headers, `key = value`, `#` comments, quoted strings, `[a, b]` lists. `.toml` with `config-toml`, `.noml` with `config-noml`, `.json` with `config-json` (the format follows the extension). JSON is read strictly: a repeated key is an error, not a choice of the last one; the top level is an object of sections. TOML and NOML files are read strictly too: NOML's `include` and its functions (`env()` and the rest) are refused, so a file cannot pull in another file or the environment; a secret comes from `env:`, `file:`, or `vault:` instead |
 | Size | at most 1 MiB |
 | Owner and mode (Unix) | owned by the service's user or root, not group- or world-writable; checked on the opened file. There is no switch to accept another file |
@@ -87,7 +87,7 @@ Takes effect at restart.
 | `shutdown_deadline` | duration | `"25s"` | the whole shutdown; at most one hour (`Builder::shutdown_deadline` wins) |
 | `member_reserve` | duration | `"2s"` | kept back from the subsystems for the members; shorter than the deadline |
 | `notify` | string | `"auto"` | `auto` sends systemd notifications when `NOTIFY_SOCKET` is set; `off` never |
-| `reload_signal` | bool | `true` | act on SIGHUP / parameter change (off: received and ignored) |
+| `reload_signal` | bool | `true` | act on SIGHUP / parameter change (off: SIGHUP stops the process on Unix; the parameter change is ignored on Windows) |
 | `dump_signal` | bool | `true` | act on SIGUSR1 / control 128 (off: received and ignored) |
 | `memory_watch` | duration | off | how often the memory watermark reads memory, `"100ms"` to `"1h"`; needs the `kernel` and `sys` features |
 | `memory_shed` | integer | `90` | the share of memory used, in percent (1 to 99), that raises the urgent line to `Shed` |
