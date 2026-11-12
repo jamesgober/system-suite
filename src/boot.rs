@@ -905,6 +905,18 @@ fn paths_error(error: &path_lib::Error) -> Error {
     }
 }
 
+/// What other accounts may do to the `.env` file: read it, except in a
+/// system-wide install, where it can hold the values of `env:` secrets for
+/// a service that runs as a privileged account (env-lib 1.1's rule, D-104).
+#[cfg(feature = "env")]
+fn env_file_others(parts: &Parts) -> crate::secure_file::Others {
+    use crate::secure_file::Others;
+    match &parts.app {
+        Some(app) if app.scope() == path_lib::Scope::Global => Others::NoAccess,
+        _ => Others::MayRead,
+    }
+}
+
 /// Step 4: the `.env` file, checked and read. The process environment is
 /// never changed. A `.env` file another user can change is refused before
 /// it is read: it can redirect the whole configuration through
@@ -936,9 +948,10 @@ fn step_environment(parts: &mut Parts) -> Result<(), Error> {
     // Read once, checked on the opened file, then parsed from the text
     // (D-073): the file checked is the file read.
     let env = match &path {
-        Some(path) if path.exists() => {
-            env_lib::Env::from_text(&crate::secure_file::read_env_file(path)?)
-        }
+        Some(path) if path.exists() => env_lib::Env::from_text(&crate::secure_file::read_env_file(
+            path,
+            env_file_others(parts),
+        )?),
         _ => Ok(env_lib::Env::new()),
     };
     let env = env.and_then(|env| env.with_prefix(&prefix)).map_err(|e| {

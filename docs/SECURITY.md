@@ -70,6 +70,7 @@ What the suite defends against, how, what each defence costs, and the test that 
 | crash reports are capped across starts: after each report the oldest are removed until `[crash] max_reports` are left | one directory listing per crash | 0.9.0 (D-100) |
 | the systemd keep-alive runs on its own thread, so a slow timer callback cannot get a healthy service killed | one parked thread, one wake-up per period | 0.9.0 (D-100) |
 | key-vault 1.2 is required (a nested `Secret::with` panicked on 1.1), and a secret the OS could not page-lock is reported at boot | one pass over the vault's keys at boot | 0.9.0 (D-100) |
+| the configuration, `.env`, `file:` secret, and audit-chain files are opened through path-lib's `open_checked` on every OS: the owner and permissions are read from the opened handle, the open does not block (a FIFO swapped in after the regular-file check is refused instead of hanging the boot), and on Unix the handle is compared with the path's own entry. The owner check no longer needs the `sys` feature. A link is followed to the file it names, which is the file checked, so Kubernetes config-map and secret mounts work. A system-wide `.env` file must not be readable by other accounts | one `open` and one `fstat` (Unix) or one security-descriptor read (Windows) per file, as before | 0.9.2 (D-104) |
 
 ## Known limits
 
@@ -78,11 +79,9 @@ Each is recorded with its reason in the decision log (D-079).
 | Limit | Why it stays |
 |---|---|
 | `.env` values, `env:` secrets among them, stay in env-lib's map in ordinary memory for the life of the process | the same exposure as the process environment, which the suite never changes; a secret that must be wiped belongs in a `file:` or `vault:` reference |
-| on Unix, without the `sys` feature, the owner check is skipped and only the mode check (no group or other write bit) applies | reading the user id is an OS call that belongs in sys-lib. With `sys` (a default feature) it applies even to a user with no entry in the user database, which sys-lib 0.4 reports by number on Linux; the container test runs as such a user |
 | the panic hook the application installs after boot is replaced at shutdown by the one from before boot | the standard library keeps one process-wide hook and cannot tell whose it is; install yours before boot (the suite's hook calls it) |
 | members' set-once global slots (the global logger, the global metrics registry) stay installed after a boot that failed after setting them | the members allow setting them once; a failed boot ends the process in every documented use |
 | event handlers run on the thread that tears down, outside the shutdown deadline | they are the application's code and must return quickly; bounding each would cost a thread per event |
-| a file checked as regular and then opened can be swapped for a FIFO between the two calls, which blocks that open | only a user who can write the directory can swap it, and the directory checks already make that the owner, who can change the configuration anyway; opening without blocking needs a flag per OS, which belongs in a member |
 | a shutdown step runs on the calling thread, without its deadline, when the OS refuses a thread | skipping the step would lose the log's last lines or the audit sync; an OS that refuses one small thread is already failing |
 | on Windows a file on a volume that keeps no access control lists (FAT, exFAT, some network shares) is accepted unchecked | anyone with the volume can change any file on it, so a refusal would only break portable installs on such drives; the system-wide directory (`%ProgramData%`) is always on NTFS |
 | the audit chain is checked on one descriptor and opened again by audit-trail, which checks its own descriptor for other users' write access but not its owner | the owner check needs audit-trail to take the checked file, or check the owner itself (recorded in `dev/ROADMAP.md`) |

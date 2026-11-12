@@ -57,7 +57,7 @@ Keep `[kernel] shutdown_deadline` below the manager's grace period (the default 
 | umask | set by the guard (`[guard] umask`, process-wide mode) | not applicable |
 | Open-file limit | raised towards `[guard] open_files_target` | not applicable |
 
-The owner check needs the `sys` feature (it reads the current user).
+The owner check is path-lib's and works without the `sys` feature (since 0.9.2). A link to the file is followed: the file it leads to is checked and read.
 
 ## Memory and secrets
 

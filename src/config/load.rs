@@ -296,8 +296,8 @@ fn refuse_ambiguous_keys(
 }
 
 /// Reads a file the process trusts for configuration: refused when another
-/// user can change it (Unix; checked on the opened file, D-049), or when it
-/// is larger than 1 MiB.
+/// account owns it or can change it (checked on the opened file, D-049,
+/// D-104), or when it is larger than 1 MiB.
 pub(crate) fn read_checked(path: &Path, what: &str) -> Result<String, Error> {
     // A regular file only, checked before opening: opening a FIFO would
     // block the boot (or the reload) until someone writes to it.
@@ -309,8 +309,16 @@ pub(crate) fn read_checked(path: &Path, what: &str) -> Result<String, Error> {
             "point the setting at a regular file",
         ));
     }
-    let file = fs::File::open(path).map_err(|e| io_error(path, what, &e))?;
-    crate::secure_file::check_open(&file, path, what)?;
+    use crate::secure_file::{Others, Refusal, open_trusted, refused};
+    let file = open_trusted(path, Others::MayRead).map_err(|refusal| match refusal {
+        Refusal::Refused(reason) => refused(path, what, reason),
+        Refusal::NotFound => io_error(path, what, &std::io::ErrorKind::NotFound.into()),
+        Refusal::Io(detail) => Error::new(
+            ErrorKind::ConfigInvalid,
+            format!("the {what} {} cannot be read: {detail}", path.display()),
+            "check that the file exists and that the service's user can read it",
+        ),
+    })?;
     let mut text = String::new();
     let read = file
         .take(MAX_FILE_BYTES + 1)
