@@ -13,7 +13,7 @@
 
 ## [0.9.1] - 2026-11-12
 
-The members' review releases adopted: signal-mod 2.2.1, log-io 2.2, metrics-lib 2.2, config-lib 1.4, and registry-io 1.2 (D-102).
+The members' review releases adopted: path-lib 1.3, signal-mod 2.2.1, log-io 2.2, metrics-lib 2.2, config-lib 1.4, and registry-io 1.2 (D-102, D-103).
 
 ### Fixed
 
@@ -26,9 +26,11 @@ The members' review releases adopted: signal-mod 2.2.1, log-io 2.2, metrics-lib 
 - log-io 2.2: a log file that is a symbolic link is refused (the logging step fails with its action), and new files are `0600` on Unix.
 - config-lib 1.4, for configuration files: in CONF a `#` starts a comment only at the start of a value or after whitespace (`password = abc#def` keeps `abc#def`), text after a value on its line is refused, and `nan` and `inf` stay strings; parse errors never quote the input.
 - metrics-lib 2.2: one metric family holds at most 5000 series by default.
+- path-lib 1.3: a directory the application uses that already exists is checked for owner and permissions (a pre-made `logs` directory at mode `0755` is refused: `chmod 700` it, or delete it so the suite creates it). On Windows, system-wide directories are created with a protected list (the service's account, SYSTEM, and Administrators; `Users` may read). A directory left by an older version with an access control list inherited from a parent that grants other accounts access is refused the same way.
 
 ### Added
 
+- `ErrorKind::DirectoryInsecure` (exit code 77): path-lib 1.3 checks every existing application directory before use, and refuses one that another account owns or can change (or can read, for the log, data, and runtime directories). It never changes the directory; the message says what to fix (D-103).
 - `[metrics] max_family_series` (default `5000`): the series one metric family may hold, so one family with request-chosen labels cannot take every slot.
 
 

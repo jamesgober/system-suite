@@ -66,7 +66,7 @@ crate still builds. No feature brings an async runtime.
 |---|---|---|---|---|
 | `kernel` | yes | this crate: `kernel`, `lifecycle`, `runtime` | stop decisions, urgent line, subsystems, workers, timers, health, crash capture, readiness | none |
 | `sys` | yes | sys-lib 0.5 | build info, instance info, process guard | none |
-| `paths` | yes | path-lib 1.2 | application and OS directories, owner-only where the suite writes; file access checks on Windows | none |
+| `paths` | yes | path-lib 1.3 | application and OS directories, owner-only where the suite writes, existing ones checked before use; file access checks on Windows | none |
 | `env` | yes | env-lib 1 (implies `paths`) | `.env` file and variables | none |
 | `config` | yes | config-lib 1.4, `conf` format (implies `paths`) | one configuration file, reload | thiserror, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2.2 | structured logging, the crash report's recent lines | none |
@@ -310,6 +310,7 @@ fn main() -> std::process::ExitCode {
 | `ConfigInvalid` | the file does not parse, a suite section has an unknown key or invalid value, or a value read later has the wrong type | the message names the file, line, key, and accepted values | 78 |
 | `AlreadyRunning` | another copy holds the single-instance lock | stop the other copy, or use another name | 75 |
 | `LockDirInsecure` | the lock directory cannot be created, is writable by others, a symlink, or on a network filesystem | the message gives the fix | 77 |
+| `DirectoryInsecure` | an application directory already exists and another account owns it or can change it (or read it, for a private one); it is never changed | fix its owner and permissions, or delete it so it is created private | 77 |
 | `Limits` | the hard open-file limit is below `[guard] open_files_minimum` | raise `LimitNOFILE=`, `ulimit -Hn`, or the launchd limit | 69 |
 | `Signals` | the signal intake could not be installed | another library may own the signal; or `disable(Member::Signals)` | 70 |
 | `Secret` | a secret reference cannot be resolved (unset variable, missing or too-open file, no such vault name), or the `secrets` feature is off | the message names the key, never the value | 78 |

@@ -281,6 +281,11 @@ pub enum ErrorKind {
     /// symlink, or is on a network filesystem. The message gives the fix.
     /// Exit code 77.
     LockDirInsecure,
+    /// An application directory already exists, and another account owns
+    /// it or can change it (or, for a private one, read it). It is never
+    /// changed: fix its owner and permissions as the message says, or
+    /// delete it so it is created private. Exit code 77.
+    DirectoryInsecure,
     /// The hard open-file limit is below the minimum. Raise `LimitNOFILE=`
     /// in the systemd unit, `ulimit -Hn`, or the launchd limit. Exit code 69.
     Limits,
@@ -367,7 +372,7 @@ impl ErrorKind {
             ErrorKind::Paths | ErrorKind::Logging => exit::CANNOT_CREATE,
             ErrorKind::Environment => exit::CONFIG,
             ErrorKind::AlreadyRunning => exit::TEMPORARY_FAILURE,
-            ErrorKind::LockDirInsecure => exit::NO_PERMISSION,
+            ErrorKind::LockDirInsecure | ErrorKind::DirectoryInsecure => exit::NO_PERMISSION,
             ErrorKind::Limits => exit::UNAVAILABLE,
             ErrorKind::Signals | ErrorKind::Kernel => exit::SOFTWARE,
             ErrorKind::Interrupted => exit::OK,
@@ -463,6 +468,7 @@ mod tests {
         assert_eq!(ErrorKind::Environment.exit_value(), 78);
         assert_eq!(ErrorKind::AlreadyRunning.exit_value(), 75);
         assert_eq!(ErrorKind::LockDirInsecure.exit_value(), 77);
+        assert_eq!(ErrorKind::DirectoryInsecure.exit_value(), 77);
         assert_eq!(ErrorKind::Limits.exit_value(), 69);
         assert_eq!(ErrorKind::Signals.exit_value(), 70);
         assert_eq!(ErrorKind::Logging.exit_value(), 73);

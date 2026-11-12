@@ -884,16 +884,25 @@ fn auto_from_env(prefix: &str) -> bool {
 
 #[cfg(feature = "paths")]
 fn paths_error(error: &path_lib::Error) -> Error {
-    let kind = match error {
-        path_lib::Error::InvalidName { .. } => ErrorKind::Setup,
-        _ => ErrorKind::Paths,
-    };
-    Error::new(
-        kind,
-        format!("the application's directories cannot be resolved: {error}"),
-        "fix the directory named in the message, or point <NAME>_<KIND>_DIR at an absolute, writable directory",
-    )
-    .member_of(Member::Paths)
+    match error {
+        // path-lib 1.3 checks an existing directory before use and never
+        // changes it (D-103).
+        path_lib::Error::Refused { .. } => Error::new(
+            ErrorKind::DirectoryInsecure,
+            format!("an application directory is refused: {error}"),
+            "fix its owner and permissions as the message says, or delete it so it is created private",
+        )
+        .member_of(Member::Paths),
+        _ => Error::new(
+            match error {
+                path_lib::Error::InvalidName { .. } => ErrorKind::Setup,
+                _ => ErrorKind::Paths,
+            },
+            format!("the application's directories cannot be resolved: {error}"),
+            "fix the directory named in the message, or point <NAME>_<KIND>_DIR at an absolute, writable directory",
+        )
+        .member_of(Member::Paths),
+    }
 }
 
 /// Step 4: the `.env` file, checked and read. The process environment is

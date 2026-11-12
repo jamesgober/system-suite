@@ -275,7 +275,9 @@ fn exit_value(kind: ErrorKind) -> u8 {
         | ErrorKind::ConfigInvalid
         | ErrorKind::Secret => exit::CONFIG,
         ErrorKind::AlreadyRunning => exit::TEMPORARY_FAILURE,
-        ErrorKind::LockDirInsecure | ErrorKind::ConfigInsecure => exit::NO_PERMISSION,
+        ErrorKind::LockDirInsecure | ErrorKind::DirectoryInsecure | ErrorKind::ConfigInsecure => {
+            exit::NO_PERMISSION
+        }
         ErrorKind::Limits => exit::UNAVAILABLE,
         ErrorKind::Interrupted => exit::OK,
         ErrorKind::Io => exit::IO_ERROR,
@@ -1158,7 +1160,35 @@ fn test_t4_directories_step_fails_when_a_file_is_in_the_way() {
 #[test]
 fn test_t4_logging_step_fails_when_the_log_file_is_a_directory() {
     let scenario = Scenario::new("it-logfile");
-    fs::create_dir_all(scenario.dir("logs").join("it-logfile.log")).unwrap();
+    // The logs directory as the suite makes it (owner-only); path-lib 1.3
+    // refuses a pre-made one that others can read (D-103).
+    let logs = scenario.dir("logs");
+    fs::create_dir_all(&logs).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&logs, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    fs::create_dir_all(logs.join("it-logfile.log")).unwrap();
     let output = scenario.run("boot");
     assert_boot_fails(&output, "step 10 (logging)", exit::CANNOT_CREATE);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_t4_directories_step_refuses_a_log_directory_others_can_read() {
+    // D-103: an existing logs directory is checked, never changed.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let scenario = Scenario::new("it-logsopen");
+    let logs = scenario.dir("logs");
+    fs::create_dir_all(&logs).unwrap();
+    fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = scenario.run("boot");
+    assert_boot_fails(&output, "step 9 (directories)", exit::NO_PERMISSION);
+    assert!(
+        text(&output.stderr).contains("refused"),
+        "{}",
+        text(&output.stderr)
+    );
 }
