@@ -338,9 +338,9 @@ pub(crate) fn io_error(path: &Path, what: &str, error: &std::io::Error) -> Error
     )
 }
 
-/// Secret references (`env:`, `file:`, `vault:`) are resolved through
-/// key-vault from 0.5 (D-025, D-031). Until then a reference is refused, so
-/// it is never mistaken for a literal.
+/// Without the `secrets` feature, a secret reference (`env:`, `file:`,
+/// `vault:`) is refused, so it is never mistaken for a literal (D-025,
+/// D-031).
 #[cfg_attr(feature = "secrets", allow(dead_code))]
 pub(crate) fn refuse_references(config: &Config) -> Result<(), Error> {
     let root = config.backend().as_value();
@@ -348,9 +348,9 @@ pub(crate) fn refuse_references(config: &Config) -> Result<(), Error> {
         Some(key) => Err(Error::new(
             ErrorKind::Secret,
             format!(
-                "the configuration key `{key}` holds a secret reference, which needs the secrets feature (0.5)"
+                "the configuration key `{key}` holds a secret reference, which needs the `secrets` feature"
             ),
-            "put the value in the file directly for now, or wait for the secrets feature",
+            "turn on the suite's `secrets` feature, or put the value in the file directly",
         )),
         None => Ok(()),
     }

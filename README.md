@@ -29,7 +29,7 @@
         <strong>MSRV is 1.89+</strong> (Rust 2024 edition). <code>#![forbid(unsafe_code)]</code>.
     </p>
     <blockquote>
-        <strong>Status: alpha (<code>0.8.1</code>).</strong> Boot in well under a millisecond, stop in about 0.2 ms, under 100 KiB of heap, no idle CPU (<a href="./docs/PERFORMANCE.md">measured</a>). A service boots with one call, reads its configuration (secrets as references resolved into a page-locked vault; reloaded all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, keeps a tamper-evident audit chain, reports health, and stops in order on a signal or a Windows service stop within a deadline. Every threat has a passing attack test, and each defence states its cost (<a href="./docs/SECURITY.md">security</a>). The public API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
+        <strong>Status: beta (<code>0.9.0</code>).</strong> The API was simplified for 1.0 in 0.9.0 (<a href="./docs/MIGRATION-0.9.md">migration from 0.8</a>); 0.9.x changes it only to fix it. Boot in well under a millisecond, stop in about 0.2 ms, under 100 KiB of heap, no idle CPU (<a href="./docs/PERFORMANCE.md">measured</a>). A service boots with one line, reads its configuration (secrets as references resolved into a page-locked vault; reloaded all or nothing), starts its own subsystems in a declared order, runs supervised workers and timers with zero idle CPU, keeps a tamper-evident audit chain, reports health, and stops in order on a signal or a Windows service stop within a deadline. Every threat has a passing attack test, and each defence states its cost (<a href="./docs/SECURITY.md">security</a>). The API is in <a href="./docs/API.md"><code>docs/API.md</code></a>, the boot and shutdown orders in <a href="./docs/BOOT-ORDER.md"><code>docs/BOOT-ORDER.md</code></a>, and the schedule in <a href="./dev/ROADMAP.md"><code>dev/ROADMAP.md</code></a>.
     </blockquote>
 </div>
 
@@ -40,33 +40,43 @@
 
 ```toml
 [dependencies]
-system-suite = "0.8"
+system-suite = "0.9"
 
 [build-dependencies]
 # Optional: the build commit and time in the first log line.
-system-suite = { version = "0.8", default-features = false, features = ["sys"] }
+system-suite = { version = "0.9", default-features = false, features = ["sys"] }
 ```
 
-```rust
+A whole service:
+
+```rust,no_run
 // src/main.rs
 fn main() -> std::process::ExitCode {
-    let system = match system_suite::start!() {        // boots every enabled part, in order
-        Ok(system) => system,
-        Err(error) => return error.report(),          // names the failing step and what to do
-    };
-    system_suite::log::info!(system.log(), "ready");
-    system.run()                                       // parks until a stop signal, then shuts down in order
+    system_suite::run!()
 }
 ```
 
-```rust
+`run!()` names the service after its package, boots every enabled part in order (the single-instance lock, the log on standard error and in `<logs>/<name>.log`, the crash hook, the configuration, the kernel), parks until a stop signal, stops everything in reverse, and returns the exit code: `0` after a clean stop. A boot failure prints what failed and what to do, and exits with a code that says why (a second copy exits with 75; see [exit codes](./docs/API.md#errors-and-exit-codes)).
+
+With work of its own, and plain `?`:
+
+```rust,no_run
+fn main() -> Result<std::process::ExitCode, system_suite::Error> {
+    let system = system_suite::start!()?;              // boots every enabled part, in order
+    let port: u16 = system.config().get_or("http.port", 8080)?;
+    system_suite::log::info!(system.log(), "ready", port = port);
+    Ok(system.run())                                    // parks until a stop signal, then stops in order
+}
+```
+
+A boot error that leaves `main` through `?` prints the same report; the process exit code is then `1`, where `run!()` and `Error::report` return the code for the kind of failure.
+
+```rust,no_run
 // build.rs (optional)
 fn main() {
     system_suite::build::emit();
 }
 ```
-
-`start!()` names the service after its package, takes the single-instance lock, opens the log (standard error and `<logs>/<name>.log`), installs the crash hook, and returns only when everything is up. A second copy exits with code 75; a boot failure prints what failed and what to do, and exits with a code that says why ([exit codes](./docs/API.md#exit-codes)). `run()` returns `0` after a clean stop.
 
 The configuration is `<config dir>/<name>.conf` (or the file named by `<NAME>_CONFIG`); every key has a secure default, so the file is optional. A file another user can change is refused.
 
@@ -82,7 +92,9 @@ shutdown_deadline = "40s"
 port = 8080
 ```
 
-```rust
+A subsystem is started in a declared order and stopped in reverse:
+
+```rust,no_run
 use system_suite::lifecycle::{Deadline, Failure, Link, Position, Subsystem};
 
 struct Http { port: u16 }
@@ -97,15 +109,11 @@ impl Subsystem for Http {
     fn stop(&mut self, _deadline: Deadline) -> Result<(), Failure> { Ok(()) }
 }
 
-fn main() -> std::process::ExitCode {
-    let system = match system_suite::System::builder("site")
+fn main() -> Result<std::process::ExitCode, system_suite::Error> {
+    let system = system_suite::System::builder("site")
         .register(Http { port: 0 })
-        .start()
-    {
-        Ok(system) => system,
-        Err(error) => return error.report(),
-    };
-    system.run()
+        .start()?;
+    Ok(system.run())
 }
 ```
 
@@ -130,6 +138,14 @@ fn main() -> std::process::ExitCode {
 | Randomness | mod-rand | `rand` |
 | Secret storage | key-vault | `secrets` |
 | Lifecycle, boot and shutdown order, workers, timers, health, crash capture | this crate | `kernel` (default) |
+
+### Member versions
+
+| system-suite | sys-lib | path-lib | env-lib | config-lib | log-io | metrics-lib | signal-mod | clock-lib | id-forge | audit-trail | registry-io | global-lib | mod-rand | key-vault |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0.9.0 | 0.5 | 1.1 | 1.0 | 1.3 | 2.1 | 2.1.1 | 2.1.1 | 1.1 | 1.0 | 1.2 | 1.1 | 1.0 | 1.0 | 1.1 |
+
+Each is the lowest version the suite accepts; Cargo picks the newest compatible release.
 
 See [`dev/PLAN.md`](./dev/PLAN.md) for the full scope, the boot and shutdown orders, what is deliberately left to other crates, and the decision log.
 

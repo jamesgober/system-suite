@@ -1,6 +1,6 @@
 # system-suite: 1.0 readiness
 
-For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass (`dev/ROADMAP.md` v0.9.x, D-080). Last updated 2026-11-08, after the second pass; 0.8.1 is the latest release.
+For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass (`dev/ROADMAP.md` v0.9.x, D-080). Last updated 2026-11-11, with the simplicity pass; 0.9.0 is the latest release.
 
 ## Done
 
@@ -12,12 +12,13 @@ For James, before any 1.0 release candidate. Kept current with each pre-1.0 pass
 - An 8-hour soak (251,225 cycles) with no growth in memory, descriptors, or threads.
 - A real service runs in CI in a container limited to 256 MiB and 1 CPU, as a user with no entry in the user database.
 - The API reviewed against the planned consumers; the changes that would break it after 1.0 are made (D-084 to D-086).
+- The simplicity pass (0.9.0, D-096): a service is `run!()`, `start!()?` works in `main`, each handle exists once, one way to get a builder and to listen, plain names; the README, `docs/API.md`, and the migration note run as doctests.
 
 ## Still open, and why
 
 | Item | Why it is open | What closes it |
 |---|---|---|
-| Two real consumers (0.8's exit) | nothing outside this repository depends on the suite yet | WASP's boot or a Hive DB start-up adopting it |
+| Two real consumers (0.8's exit) | WASP's gateway boots on the suite; Hive DB does not yet | a Hive DB start-up adopting it, and both run on every listed environment |
 | The API review against real use | the review so far was against the consumers' specification | the same consumers; changes then, not after 1.0 |
 | Additive API a consumer may need (D-087) | designing it without a caller risks the wrong shape | a consumer asking: `Kernel::reload`, a dump from the kernel, a per-request deadline, error hooks on workers, subsystem restart, a lock beside the data directory |
 | `config-xml`, `config-validation` | they need XML or regex, and no first-party crate covers those yet | first-party XML and regex crates |

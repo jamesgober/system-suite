@@ -40,7 +40,7 @@ pub(crate) enum Event {
         reason: String,
     },
     TimerPanicked {
-        name: &'static str,
+        name: std::borrow::Cow<'static, str>,
     },
 }
 
@@ -115,7 +115,7 @@ impl Runtime {
     /// if the timer thread cannot be started.
     pub fn every<F>(
         &self,
-        name: &'static str,
+        name: impl Into<std::borrow::Cow<'static, str>>,
         period: Duration,
         tick: F,
     ) -> Result<TimerHandle, Error>
@@ -123,7 +123,8 @@ impl Runtime {
         F: FnMut() + Send + 'static,
     {
         self.check_accepting()?;
-        timer::check_interval(name, period)?;
+        let name = name.into();
+        timer::check_interval(&name, period)?;
         self.inner
             .timers
             .every(name, period, Box::new(tick), self.observer())
@@ -136,7 +137,7 @@ impl Runtime {
     /// As for [`every`](Self::every).
     pub fn after<F>(
         &self,
-        name: &'static str,
+        name: impl Into<std::borrow::Cow<'static, str>>,
         delay: Duration,
         fire: F,
     ) -> Result<TimerHandle, Error>
@@ -144,7 +145,8 @@ impl Runtime {
         F: FnOnce() + Send + 'static,
     {
         self.check_accepting()?;
-        timer::check_interval(name, delay)?;
+        let name = name.into();
+        timer::check_interval(&name, delay)?;
         self.inner
             .timers
             .after(name, delay, Box::new(fire), self.observer())

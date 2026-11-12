@@ -89,7 +89,7 @@ The same profile on Windows (0.8.1, D-093), release profile, 300 boots after 20 
 | one memory watermark reading | 10 µs on Linux, 8 µs on macOS, 1.9 µs on Windows (medians); at `memory_watch = "5s"`, about 2 parts per million of one core and 0.2 wake-ups per second | only with `[kernel] memory_watch` set |
 | `AuditLog::record` with `sync = "every"` | one `fdatasync` (milliseconds on rotating disks, tens of microseconds on NVMe) | per record |
 | `Secret::with` | key-vault's read path (defragment into a wiped scratch buffer) | per read |
-| `System::health` | one `Vec` and the reasons; `status` allocates nothing of its own | per call |
+| `Kernel::health` | one `Vec` and the reasons; `status` allocates nothing of its own | per call |
 | a log line | log-io's pipeline: formatting and each sink | per line |
 
 The boot timeline of a running system is `System::boot_timeline()` and the `boot step` lines of the log: how long each step took, so a slow start is visible without a profiler.

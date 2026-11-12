@@ -550,16 +550,11 @@ impl Parts {
     pub(crate) fn start_memory_watch(&self) {
         use crate::kernel::memory::{self, Watermark};
 
+        // The sys member cannot be disabled at run time, so with the
+        // feature compiled in its readings are always there.
         let Some(period) = self.sections.kernel.memory_watch else {
             return;
         };
-        if self.settings.is_disabled(Member::Sys) {
-            self.log.warn(
-                "the memory watermark needs the sys member; it is not running",
-                &[],
-            );
-            return;
-        }
         let kernel = self.kernel.clone();
         let log = self.log.clone();
         let mut mark = Watermark::new(self.sections.kernel.memory_shed);

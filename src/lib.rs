@@ -13,19 +13,35 @@
 //!
 //! ## Tier 1
 //!
+//! A whole service: boot every enabled member in order, run until a stop
+//! signal, stop in reverse, and return the exit code.
+//!
 //! ```no_run
-//! # #[cfg(all(feature = "kernel", feature = "log"))]
+//! # #[cfg(feature = "kernel")]
 //! fn main() -> std::process::ExitCode {
-//!     let system = match system_suite::start!() {      // boots every member in order
-//!         Ok(system) => system,
-//!         Err(error) => return error.report(),        // the failing step, and what to do
-//!     };
-//!     system_suite::log::info!(system.log(), "ready");  // typed handles, no lookups by name
-//!     system.run()                                      // parks until a stop signal, then stops in order
+//!     system_suite::run!()
 //! }
-//! # #[cfg(not(all(feature = "kernel", feature = "log")))]
+//! # #[cfg(not(feature = "kernel"))]
 //! # fn main() {}
 //! ```
+//!
+//! With work of its own, and plain `?`:
+//!
+//! ```no_run
+//! # #[cfg(all(feature = "kernel", feature = "log", feature = "config"))]
+//! fn main() -> Result<std::process::ExitCode, system_suite::Error> {
+//!     let system = system_suite::start!()?;              // boots every member in order
+//!     let port: u16 = system.config().get_or("http.port", 8080)?;
+//!     system_suite::log::info!(system.log(), "ready", port = port); // typed handles
+//!     Ok(system.run())                                   // parks until a stop signal
+//! }
+//! # #[cfg(not(all(feature = "kernel", feature = "log", feature = "config")))]
+//! # fn main() {}
+//! ```
+//!
+//! An [`Error`] that leaves `main` through `?` prints the same report as
+//! [`Error::report`]; the exit code is then `1`, where [`run!`] and
+//! `report` return the code for the kind of failure.
 //!
 //! For the build commit and time in the first log line, add the suite as a
 //! build dependency with the `sys` feature and call
@@ -33,7 +49,7 @@
 //!
 //! ```toml
 //! [build-dependencies]
-//! system-suite = { version = "0.8", default-features = false, features = ["sys"] }
+//! system-suite = { version = "0.9", default-features = false, features = ["sys"] }
 //! ```
 //!
 //! ```ignore
@@ -51,19 +67,19 @@
 //! the application's subsystems, ready. A failing step stops the boot and
 //! unwinds what started; the [`Error`] names the step and what to do.
 //! [`System::run`] waits for a stop (SIGTERM, SIGINT, Ctrl+C, a console
-//! close, or `System::request_stop`) and stops everything in reverse within
+//! close, or `Kernel::request_stop`) and stops everything in reverse within
 //! a deadline: the subsystems first, then the workers and timers, then the
 //! members.
 //!
 //! ## Status
 //!
-//! `0.5`: feature complete. Configuration with secret references and
-//! two-phase reload, metrics, audit, kernel events, subsystems, the urgent
-//! line, supervised workers, timers, health, and Windows service control.
-//! `0.6` measured every performance target (`docs/PERFORMANCE.md`). `0.7`
-//! hardened it: every threat has a passing attack test (`docs/SECURITY.md`).
-//! The public API is in
-//! `docs/API.md` and the schedule in `dev/ROADMAP.md` (both in the
+//! `0.9`: beta. The API was simplified for 1.0 in 0.9.0 (each handle on
+//! [`Foundation`] once, one way to register a listener or get a builder,
+//! plain names); 0.9.x changes it only to fix it. Every performance target
+//! is measured (`docs/PERFORMANCE.md`) and every threat has a passing
+//! attack test (`docs/SECURITY.md`). The API tour is in `docs/API.md`, the
+//! migration from 0.8 in `docs/MIGRATION-0.9.md`, and the schedule in
+//! `dev/ROADMAP.md` (all in the
 //! [repository](https://github.com/jamesgober/system-suite)).
 
 #![doc(html_root_url = "https://docs.rs/system-suite")]
@@ -291,6 +307,48 @@ macro_rules! start {
     ($name:expr $(,)?) => {
         $crate::System::builder($name).start()
     };
+}
+
+/// Boots a service with the defaults, runs it until a stop, and returns the
+/// exit code: the whole of `main` for most services.
+///
+/// `run!()` names the application after its package; `run!("name")` names
+/// it explicitly. It is [`start!`] followed by [`System::run`]; when the
+/// boot fails it writes the [report](Error::report) to standard error and
+/// returns the error's exit code instead, so a supervisor sees why.
+///
+/// # Examples
+///
+/// ```no_run
+/// fn main() -> std::process::ExitCode {
+///     system_suite::run!()
+/// }
+/// ```
+#[cfg(feature = "kernel")]
+#[macro_export]
+macro_rules! run {
+    () => {
+        $crate::run!(::core::env!("CARGO_PKG_NAME"))
+    };
+    ($name:expr $(,)?) => {
+        match $crate::start!($name) {
+            ::core::result::Result::Ok(system) => system.run(),
+            ::core::result::Result::Err(error) => error.report(),
+        }
+    };
+}
+
+/// Every Rust block in the README and in `docs/API.md` is compiled (and
+/// run, unless it boots a real service) as a doctest with every feature,
+/// so the documentation cannot drift from the API.
+#[cfg(all(doctest, feature = "full"))]
+mod doc_tests {
+    #[doc = include_str!("../README.md")]
+    struct Readme;
+    #[doc = include_str!("../docs/API.md")]
+    struct ApiReference;
+    #[doc = include_str!("../docs/MIGRATION-0.9.md")]
+    struct Migration;
 }
 
 #[cfg(test)]

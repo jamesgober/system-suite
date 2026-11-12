@@ -3,7 +3,7 @@
 
 use std::{fmt, sync::Arc, time::Duration};
 
-use registry_io::{HandlerGuard, HandlerId, SyncRegistry};
+use registry_io::{HandlerId, SyncRegistry};
 
 use super::Notice;
 use crate::lifecycle::Phase;
@@ -16,16 +16,47 @@ pub struct Events {
     registry: Arc<SyncRegistry<Event>>,
 }
 
-/// A registered callback, removed when the guard is dropped.
-#[must_use = "the callback is removed when the guard is dropped"]
+/// A registered callback: removed when the guard is dropped, or kept until
+/// the shutdown with [`keep`](Self::keep).
+#[must_use = "the callback is removed when the guard is dropped; call keep() to keep it"]
 pub struct EventGuard {
-    _guard: HandlerGuard<Event>,
+    registry: Arc<SyncRegistry<Event>>,
+    id: Option<HandlerId>,
 }
 
-/// A callback registered for the life of the process, until
-/// [`Events::unregister`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct EventId(HandlerId);
+impl EventGuard {
+    /// Keeps the callback registered until the shutdown, which removes
+    /// every callback at its step 4.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(all(feature = "registry", feature = "sys"))] {
+    /// use system_suite::{Member, System};
+    ///
+    /// let system = System::builder("keep-doc")
+    ///     .process_wide(false)
+    ///     .single_instance(false)
+    ///     .disable(Member::Log)
+    ///     .start()?;
+    /// system.events().register(|_event| {}).keep();
+    /// assert_eq!(system.events().handler_count(), 1);
+    /// # let _ = system.shutdown();
+    /// # }
+    /// # Ok::<(), system_suite::Error>(())
+    /// ```
+    pub fn keep(mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for EventGuard {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            let _removed = self.registry.unregister(id);
+        }
+    }
+}
 
 impl Events {
     pub(crate) fn new() -> Events {
@@ -55,28 +86,17 @@ impl Events {
         self.registry.on_panic(callback);
     }
 
-    /// Calls `handler` for every event until the returned guard is
-    /// dropped.
-    pub fn register_guard<F>(&self, handler: F) -> EventGuard
+    /// Calls `handler` for every event until the returned guard is dropped
+    /// (or, with [`EventGuard::keep`], until the shutdown). The one way to
+    /// listen (D-096).
+    pub fn register<F>(&self, handler: F) -> EventGuard
     where
         F: Fn(&Event) + Send + Sync + 'static,
     {
         EventGuard {
-            _guard: self.registry.register_guard(handler),
+            registry: Arc::clone(&self.registry),
+            id: Some(self.registry.register(handler)),
         }
-    }
-
-    /// Calls `handler` for every event until [`unregister`](Self::unregister).
-    pub fn register<F>(&self, handler: F) -> EventId
-    where
-        F: Fn(&Event) + Send + Sync + 'static,
-    {
-        EventId(self.registry.register(handler))
-    }
-
-    /// Removes a callback; `false` if it was already gone.
-    pub fn unregister(&self, id: EventId) -> bool {
-        self.registry.unregister(id.0)
     }
 
     /// How many callbacks are registered.
@@ -122,7 +142,7 @@ impl fmt::Debug for EventGuard {
 /// use system_suite::kernel::Event;
 ///
 /// let system = system_suite::start!()?;
-/// let _guard = system.events().register_guard(|event: &Event| {
+/// let _guard = system.events().register(|event: &Event| {
 ///     if let Event::WorkerFailed { name } = event {
 ///         eprintln!("page the on-call engineer: {name} failed");
 ///     }

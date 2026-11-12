@@ -11,7 +11,7 @@
 //! ```
 //! use system_suite::exit;
 //!
-//! assert_eq!(exit::TEMPFAIL, 75);
+//! assert_eq!(exit::TEMPORARY_FAILURE, 75);
 //! let code = std::process::ExitCode::from(exit::CONFIG);
 //! # let _ = code;
 //! ```
@@ -21,20 +21,20 @@ pub const OK: u8 = 0;
 /// An invalid setup in the code (`EX_USAGE`).
 pub const USAGE: u8 = 64;
 /// The audit chain failed verification (`EX_DATAERR`).
-pub const DATAERR: u8 = 65;
+pub const DATA_ERROR: u8 = 65;
 /// A requirement of the environment is missing (`EX_UNAVAILABLE`).
 pub const UNAVAILABLE: u8 = 69;
 /// An internal failure, a subsystem failure, or a critical worker failure
 /// (`EX_SOFTWARE`).
 pub const SOFTWARE: u8 = 70;
 /// A directory or file cannot be created (`EX_CANTCREAT`).
-pub const CANTCREAT: u8 = 73;
+pub const CANNOT_CREATE: u8 = 73;
 /// An I/O error (`EX_IOERR`).
-pub const IOERR: u8 = 74;
+pub const IO_ERROR: u8 = 74;
 /// Already running: try again later (`EX_TEMPFAIL`).
-pub const TEMPFAIL: u8 = 75;
+pub const TEMPORARY_FAILURE: u8 = 75;
 /// Insecure permissions were refused (`EX_NOPERM`).
-pub const NOPERM: u8 = 77;
+pub const NO_PERMISSION: u8 = 77;
 /// The configuration is missing or invalid (`EX_CONFIG`).
 pub const CONFIG: u8 = 78;
 /// The shutdown deadline was missed and something was abandoned.

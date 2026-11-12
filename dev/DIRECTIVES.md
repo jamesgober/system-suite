@@ -38,7 +38,7 @@ system-suite bundles the foundation libraries (system facts and boot kit, paths,
 1. Compiles clean on Linux, macOS, and Windows (x86_64 and aarch64), stable and MSRV 1.89.
 2. `fmt`, `clippy -D warnings` (all targets; default, all, and no default features), tests in the same three modes, `cargo doc -D warnings` with default and all features, and `cargo package` in a fresh target directory: clean on Windows and in WSL Ubuntu, stable and 1.89.
 3. `cargo audit` and `cargo deny check` pass; `cargo tree` shows no third-party runtime dependency that is missing from the dependency register (`PLAN.md` section 12.4).
-4. A Tier-1 API exists and headlines the docs (`system_suite::start`, `System::run`).
+4. A Tier-1 API exists and headlines the docs (`system_suite::run!`, `start!`, `System::run`): the common uses are one or two obvious lines, with plain names and one way to do each thing (D-096). The README, `docs/API.md`, and the migration notes run as doctests.
 5. Every boot and shutdown step has a failure-injection test; every threat in `PLAN.md` section 10 has an attack test that must fail to get through.
 6. Hot-path changes carry benchmarks; no regression over 5%.
 7. `README.md`, `docs/API.md`, and `CHANGELOG.md` updated in the same change; the matching `docs/release/vX.Y.Z.md` written before the tag; every version string bumped.
@@ -56,6 +56,14 @@ system-suite bundles the foundation libraries (system facts and boot kit, paths,
 - No file the suite creates is readable by other users.
 - The crash report never contains a secret.
 - Every member can be compiled out without breaking the build.
+
+## 4a. Versioning: what a suite does differently
+
+- **No API freeze after 1.0.** The suite keeps growing in minor releases (new members, new wiring); each addition must be clearly useful.
+- **The suite's version is its own.** A member's major release does not by itself make a suite major release; a suite major happens only when the suite's own API breaks for its users and no adapter can hide it.
+- **Member modules are re-exported whole, and the typed handles return the members' own types** (D-097). A member's major release is therefore adopted in a suite minor release before 1.0, with a migration note; after 1.0 the suite absorbs it behind an adapter, or keeps the old shape in a `compat` module for at least one minor release, so users upgrade on their own schedule.
+- **Deprecate before removing** after 1.0: an item leaving the facade is `#[deprecated]`, with its replacement named, for at least one minor release. Before 1.0 the API may be simplified directly, with a migration note (D-096).
+- **A compatibility table** of suite version to member versions is kept in the README.
 
 ---
 

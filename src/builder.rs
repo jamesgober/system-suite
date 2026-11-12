@@ -45,8 +45,9 @@ pub(crate) type OnReady =
 /// use std::time::Duration;
 /// use system_suite::{Member, System};
 ///
-/// # #[cfg(feature = "sys")] {
+/// # #[cfg(all(feature = "sys", feature = "paths"))] {
 /// let system = System::builder("builder-doc")
+/// #     .portable(std::env::temp_dir().join("system-suite-doc").join("builder-doc"))
 ///     .process_wide(false)          // touch no process-wide state (tests, embedding)
 ///     .single_instance(false)       // several copies may run
 ///     .disable(Member::Log)         // no log sinks
@@ -58,7 +59,7 @@ pub(crate) type OnReady =
 /// # }
 /// # Ok::<(), system_suite::Error>(())
 /// ```
-#[must_use = "a Builder does nothing until start()"]
+#[must_use = "a Builder does nothing until start() or boot()"]
 pub struct Builder {
     pub(crate) settings: Settings,
 }
@@ -121,7 +122,7 @@ impl Builder {
     /// digits, `-`, `_`, `.`, not starting with `.`. The name names the
     /// directories, the lock, the configuration file (`<name>.conf`), the
     /// environment prefix (`SITE_` for `site`), and the log target.
-    pub fn new(name: &str) -> Builder {
+    pub(crate) fn new(name: &str) -> Builder {
         Builder {
             settings: Settings {
                 name: name.to_owned(),
@@ -160,7 +161,7 @@ impl Builder {
     /// The application's build info, from
     /// [`build_info!`](crate::build_info) expanded in the application crate.
     /// [`start!`](crate::start) sets it; without it,
-    /// [`Foundation::build`](crate::Foundation::build) is `None` and the
+    /// [`Foundation::build_info`](crate::Foundation::build_info) is `None` and the
     /// first log lines say so.
     #[cfg(feature = "sys")]
     pub fn build_info(mut self, build: &'static sys_lib::BuildInfo) -> Self {
@@ -222,9 +223,10 @@ impl Builder {
     }
 
     /// Turns a compiled-in member off for this run: `Env`, `Config`
-    /// (defaults only), `Log` (no sinks), `Metrics`, `Signals`. Members
-    /// others need at run time cannot be disabled, and asking is a
-    /// [`Setup`](ErrorKind::Setup) error.
+    /// (defaults only), `Log` (no sinks), `Metrics`, `Signals`, `Audit`,
+    /// `Registry`, `Globals`, `Secrets`. Members others need at run time
+    /// (`Kernel`, `Sys`, `Paths`, `Time`, `Ids`, `Rand`) cannot be
+    /// disabled, and asking is a [`Setup`](ErrorKind::Setup) error.
     pub fn disable(mut self, member: Member) -> Self {
         if !self.settings.disabled.contains(&member) {
             self.settings.disabled.push(member);
