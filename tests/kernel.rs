@@ -915,7 +915,20 @@ fn test_a_long_audit_field_is_cut() {
 #[test]
 fn test_an_audit_chain_that_is_not_a_file_is_refused() {
     let root = Root::new("audit-dir");
-    std::fs::create_dir_all(audit_file(&root, "kernel-audit-dir")).unwrap();
+    let chain = audit_file(&root, "kernel-audit-dir");
+    std::fs::create_dir_all(&chain).unwrap();
+    // The data directory as the suite makes it: path-lib 1.3 refuses a
+    // pre-made one others can read (D-103).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        for dir in [
+            root.path().join("data"),
+            root.path().join("data").join("audit"),
+        ] {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
     let error = quiet("kernel-audit-dir", &root).start().err().unwrap();
     assert_eq!(error.kind(), ErrorKind::Audit);
     assert!(error.to_string().contains("not a regular file"), "{error}");
