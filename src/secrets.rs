@@ -609,6 +609,7 @@ mod tests {
         // the empty file, not the memory-lock limit.
         let dir = std::env::temp_dir().join(format!("ss-empty-secret-{}", std::process::id()));
         let _made = fs::create_dir_all(&dir);
+        crate::secure_file::make_private_for_tests(&dir);
         let file = dir.join("db_password");
         assert!(fs::write(&file, "\n").is_ok());
         #[cfg(unix)]

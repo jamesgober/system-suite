@@ -47,6 +47,7 @@ impl Root {
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();
+        make_private(&root);
         Root(root)
     }
 
@@ -67,6 +68,36 @@ impl Drop for Root {
         drop(fs::remove_dir_all(&self.0));
     }
 }
+
+/// Makes `dir` owner-only on Windows (the current user, SYSTEM, and
+/// Administrators, nothing inherited), as the suite's own directories are.
+/// A machine's temporary folder can grant other accounts write access, and
+/// the file checks rightly refuse what is inside it (D-098).
+#[cfg(windows)]
+fn make_private(dir: &Path) {
+    let user = match (env::var("USERDOMAIN"), env::var("USERNAME")) {
+        (Ok(domain), Ok(user)) => format!("{domain}\\{user}"),
+        (_, Ok(user)) => user,
+        _ => panic!("USERNAME is not set"),
+    };
+    let status = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{user}:(OI)(CI)F"))
+        .args([
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "/grant:r",
+            "*S-1-5-32-544:(OI)(CI)F",
+        ])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "icacls failed on {}", dir.display());
+}
+
+#[cfg(not(windows))]
+fn make_private(_dir: &Path) {}
 
 fn write_private(path: &Path, text: &str) {
     fs::write(path, text).unwrap();

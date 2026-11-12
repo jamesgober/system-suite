@@ -279,3 +279,35 @@ pub(crate) fn read_env_file(path: &Path) -> Result<String, Error> {
     }
     Ok(text)
 }
+
+/// Makes `dir` owner-only on Windows for a unit test (the current user,
+/// SYSTEM, and Administrators, nothing inherited): a machine's temporary
+/// folder can grant other accounts write access, which the checks refuse.
+#[cfg(all(test, windows))]
+pub(crate) fn make_private_for_tests(dir: &Path) {
+    let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+        (Ok(domain), Ok(user)) => format!("{domain}\\{user}"),
+        (_, Ok(user)) => user,
+        _ => panic!("USERNAME is not set"),
+    };
+    let status = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{user}:(OI)(CI)F"))
+        .args([
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "/grant:r",
+            "*S-1-5-32-544:(OI)(CI)F",
+        ])
+        .stdout(std::process::Stdio::null())
+        .status();
+    assert!(
+        status.is_ok_and(|s| s.success()),
+        "icacls failed on {}",
+        dir.display()
+    );
+}
+
+#[cfg(all(test, not(windows)))]
+pub(crate) fn make_private_for_tests(_dir: &Path) {}

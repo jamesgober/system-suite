@@ -397,6 +397,7 @@ mod tests {
             std::env::temp_dir().join(format!("system-suite-load-{label}-{}", std::process::id()));
         drop(fs::remove_dir_all(&dir));
         fs::create_dir_all(&dir).ok();
+        crate::secure_file::make_private_for_tests(&dir);
         dir
     }
 
