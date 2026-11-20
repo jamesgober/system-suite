@@ -127,7 +127,12 @@ mod secrets;
 // Without `config` only the defaults exist, so some values are never built.
 #[cfg_attr(not(feature = "config"), allow(dead_code))]
 mod sections;
-#[cfg(any(feature = "env", feature = "config", feature = "audit"))]
+// With `paths` alone only the drive check is used (a directory refusal).
+#[cfg(feature = "paths")]
+#[cfg_attr(
+    not(any(feature = "env", feature = "config", feature = "audit")),
+    allow(dead_code, unused_imports)
+)]
 mod secure_file;
 #[cfg(any(feature = "log", feature = "signals", feature = "kernel"))]
 mod shutdown;
