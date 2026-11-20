@@ -289,6 +289,47 @@ fn test_a_dropped_system_logs_the_exit_code_it_knows() {
     assert!(line.contains("\"exit_code\":0"), "{line}");
 }
 
+#[cfg(feature = "log")]
+#[test]
+fn test_the_lock_turned_off_by_the_application_is_not_a_warning() {
+    // D-106: single_instance(false) is a choice made in code, logged once at
+    // info; guard.lock = false in the configuration stays a warning.
+    let root = Root::new("lockoff");
+    let lock_line = |name: &str| {
+        let log = fs::read_to_string(root.path().join("logs").join(format!("{name}.log")))
+            .unwrap_or_default();
+        assert!(!log.contains("LockDisabled"), "{log}");
+        log.lines()
+            .find(|line| line.contains("single-instance lock is off"))
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    drop(
+        System::builder("kernel-lockapp")
+            .process_wide(false)
+            .single_instance(false)
+            .portable(root.path())
+            .start()
+            .unwrap(),
+    );
+    let line = lock_line("kernel-lockapp");
+    assert!(line.contains("\"level\":\"info\""), "{line}");
+    assert!(line.contains("the application"), "{line}");
+
+    drop(
+        System::builder("kernel-lockconf")
+            .process_wide(false)
+            .portable(root.path())
+            .config_str("[guard]\nlock = false\n")
+            .start()
+            .unwrap(),
+    );
+    let line = lock_line("kernel-lockconf");
+    assert!(line.contains("\"level\":\"warn\""), "{line}");
+    assert!(line.contains("guard.lock = false"), "{line}");
+}
+
 #[test]
 fn test_a_failing_subsystem_unwinds_the_ones_started_before_it() {
     for panic in [false, true] {

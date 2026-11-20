@@ -77,6 +77,42 @@ fn unenforced(target: &Path) -> Option<fs::File> {
     (regular && !access.enforced).then_some(file)
 }
 
+/// Whether `path`, or its nearest existing parent when it does not exist,
+/// is on a Windows volume that keeps no access control lists (FAT,
+/// exFAT): no owner or permission check can protect what is on it, and
+/// no change of permissions can fix it (D-106). Always `false` on other
+/// systems. Costs one open and one volume query, at boot and on refusals.
+#[cfg(feature = "paths")]
+pub(crate) fn on_volume_without_acls(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // Opens directories as well as files.
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let mut current = Some(path);
+        while let Some(at) = current.filter(|p| !p.as_os_str().is_empty()) {
+            if let Ok(handle) = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(at)
+            {
+                return path_lib::file_access(&handle).is_ok_and(|access| !access.enforced);
+            }
+            current = at.parent();
+        }
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        let _unix = path;
+        false
+    }
+}
+
+/// What to do about a file on a drive without access control lists.
+#[cfg(feature = "paths")]
+pub(crate) const FIX_NO_ACLS: &str = "move it to an NTFS drive: a FAT or exFAT drive keeps no permissions, so nothing stops another account from reading or changing it";
+
 /// The error for a refused configuration-like file (`what` names it).
 #[cfg(feature = "paths")]
 #[cfg_attr(
@@ -84,6 +120,16 @@ fn unenforced(target: &Path) -> Option<fs::File> {
     allow(dead_code)
 )]
 pub(crate) fn refused(path: &Path, what: &str, reason: &str) -> Error {
+    if on_volume_without_acls(path) {
+        return Error::new(
+            ErrorKind::ConfigInsecure,
+            format!(
+                "the {what} {} is refused: its drive keeps no access control lists (FAT or exFAT), so any account can change it",
+                path.display()
+            ),
+            FIX_NO_ACLS,
+        );
+    }
     Error::new(
         ErrorKind::ConfigInsecure,
         format!("the {what} {} is refused: {reason}", path.display()),
@@ -183,3 +229,34 @@ pub(crate) fn make_private_for_tests(dir: &Path) {
 
 #[cfg(all(test, not(windows), feature = "config"))]
 pub(crate) fn make_private_for_tests(_dir: &Path) {}
+
+#[cfg(all(test, feature = "paths"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a_local_drive_keeps_access_control_lists() {
+        // D-106: only a FAT or exFAT drive answers true; the temporary
+        // directory of every CI runner is on NTFS, APFS, or ext4.
+        let dir = std::env::temp_dir();
+        assert!(!on_volume_without_acls(&dir));
+        assert!(!on_volume_without_acls(&dir.join("not-there").join("x")));
+        assert!(!on_volume_without_acls(Path::new("")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_a_fat_drive_is_recognised_when_one_is_named() {
+        // A local check: SYSTEM_SUITE_TEST_FAT_DIR names an existing
+        // directory on a FAT or exFAT drive. CI runners have none.
+        let Some(dir) = std::env::var_os("SYSTEM_SUITE_TEST_FAT_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        assert!(on_volume_without_acls(&dir));
+        assert!(on_volume_without_acls(&dir.join("not-there")));
+        let error = refused(&dir.join("app.conf"), "configuration file", "unused");
+        assert!(error.to_string().contains("FAT or exFAT"), "{error}");
+        assert_eq!(error.action(), FIX_NO_ACLS);
+    }
+}

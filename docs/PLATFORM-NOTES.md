@@ -52,12 +52,14 @@ Keep `[kernel] shutdown_deadline` below the manager's grace period (the default 
 |---|---|---|
 | Directories the suite creates | mode `0700` | a protected access control list naming only the user, `SYSTEM`, and `Administrators` (path-lib 1.1) |
 | Log files, audit chain | mode `0600` | inherit the directory's protected list |
-| Configuration and `.env` check | refused when group- or world-writable or owned by another user (not root) | not checked: the file's directory list governs it |
-| Secret files (`file:`) | refused with any group or other bit, or another owner | not checked |
+| Configuration and `.env` check | refused when group- or world-writable or owned by another user (not root) | refused when another account can change it, or its owner is not the service's account, `SYSTEM`, or `Administrators` (since 0.9.0) |
+| Secret files (`file:`) | refused with any group or other bit, or another owner | refused when another account can read or change it, or by the same owner rule |
 | umask | set by the guard (`[guard] umask`, process-wide mode) | not applicable |
 | Open-file limit | raised towards `[guard] open_files_target` | not applicable |
 
 The owner check is path-lib's and works without the `sys` feature (since 0.9.2). A link to the file is followed: the file it leads to is checked and read.
+
+On Windows a drive that keeps no access control lists (FAT, exFAT) cannot be protected by any check. A configuration, `.env`, or secret file there is accepted, so portable installs on such drives still boot, and the boot logs a warning naming the file. The application's directories there are refused outside a portable install (`Builder::portable`); the error says so and says to move them to an NTFS drive (since 0.9.4).
 
 ## Memory and secrets
 
