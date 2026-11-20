@@ -99,6 +99,7 @@ Exit: two weeks without an API change; every document checked against the build;
 - [x] The simplicity pass (James, 2026-11-11): one-line Tier 1 entry points (`run!()`, and `start!()?` with a readable error), plain names, one way to do each thing, `docs/API.md` as a task-oriented tour run as doctests, and `docs/MIGRATION-0.9.md` (D-096).
 - [ ] **James's pre-1.0 review**, before the API is frozen: the API, the workflow, and anything he wants added before 1.0. Whatever he adds goes into this roadmap (into 0.9 or a new milestone before 1.0) with its exit criteria; 1.0 waits for it.
 - [ ] API frozen; `0.9.x` only fixes.
+- [ ] Secrets in list items (D-107): a `[[name]]` list item cannot hold a secret, since a secret is named by its dotted path and an item has none. Needs an indexed path (`upstream[0].password`) in `Config::secret` and in resolving, which is new API: decided in the pre-1.0 review, not added in 0.9.x. Until then a list item reads a credential through an application-level reference (a key naming the secret held elsewhere).
 - [ ] `docs/STABILITY-1.0.md` drafted with the requirement-to-test map.
 
 ## v0.9.x - Pre-1.0 polish (before any 1.0 release candidate)

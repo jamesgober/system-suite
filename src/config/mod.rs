@@ -172,7 +172,8 @@ impl Config {
         self.value(path).is_some()
     }
 
-    /// The keys of `section`, sorted; empty when it is absent or not a
+    /// The keys of `section`, sorted, its sub-sections included: an empty
+    /// `[a.b]` is the key `b` of `a`. Empty when it is absent or not a
     /// section.
     #[must_use]
     pub fn keys(&self, section: &str) -> Vec<&str> {
@@ -490,6 +491,33 @@ mod tests {
         assert!(c.contains("q.a") && !c.contains("q.z"));
         assert_eq!(c.version(), 1);
         assert!(c.source().is_none());
+    }
+
+    #[test]
+    fn test_an_empty_section_is_a_key_of_its_parent() {
+        // D-107 (config-lib 1.4.2): a section with nothing under it is an
+        // empty table, so a check of a section's keys sees a misspelled one.
+        let c = config("[auth]\nkey = 1\n[auth.passwrd]\n[content.fields.post.author]\n");
+        assert_eq!(c.keys("auth"), vec!["key", "passwrd"]);
+        assert!(c.keys("auth.passwrd").is_empty());
+        assert!(c.contains("auth.passwrd"));
+        assert_eq!(c.keys("content.fields.post"), vec!["author"]);
+    }
+
+    #[test]
+    fn test_a_list_of_tables_reaches_the_backend() {
+        // D-107 (config-lib 1.5): `[[name]]` in a `.conf` file.
+        let c = config(
+            "[[upstream]]\nhost = \"a\"\n[[upstream]]\nhost = \"b\"\n[upstream.tls]\nverify = true\n",
+        );
+        let upstream: &[config_lib::Value] = c
+            .backend()
+            .get("upstream")
+            .and_then(|v| v.as_array().ok())
+            .map_or(&[], Vec::as_slice);
+        assert_eq!(upstream.len(), 2);
+        let last = upstream[1].as_table().ok();
+        assert!(last.is_some_and(|t| t.contains_key("tls")));
     }
 
     #[test]
