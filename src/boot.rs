@@ -915,6 +915,19 @@ fn auto_from_env(prefix: &str) -> bool {
 #[cfg(feature = "paths")]
 fn paths_error(error: &path_lib::Error) -> Error {
     match error {
+        // On a drive without access control lists no change of
+        // permissions helps, so the message says so (D-106).
+        path_lib::Error::Refused { path, .. } if crate::secure_file::on_volume_without_acls(path) => {
+            Error::new(
+                ErrorKind::DirectoryInsecure,
+                format!(
+                    "an application directory, {}, is on a drive that keeps no access control lists (FAT or exFAT), so any account can change what is in it",
+                    path.display()
+                ),
+                "move the application's directories to an NTFS drive (point <NAME>_<KIND>_DIR at one), or use a portable install (Builder::portable), which accepts such a drive",
+            )
+            .member_of(Member::Paths)
+        }
         // path-lib 1.3 checks an existing directory before use and never
         // changes it (D-103).
         path_lib::Error::Refused { .. } => Error::new(
@@ -978,10 +991,20 @@ fn step_environment(parts: &mut Parts) -> Result<(), Error> {
     // Read once, checked on the opened file, then parsed from the text
     // (D-073): the file checked is the file read.
     let env = match &path {
-        Some(path) if path.exists() => env_lib::Env::from_text(&crate::secure_file::read_env_file(
-            path,
-            env_file_others(parts),
-        )?),
+        Some(path) if path.exists() => {
+            let text = crate::secure_file::read_env_file(path, env_file_others(parts))?;
+            if crate::secure_file::on_volume_without_acls(path) {
+                parts.early_lines.push(EarlyLine {
+                    warn: true,
+                    message: "the environment file is on a drive that keeps no access control lists (FAT or exFAT); any account can read or change it",
+                    fields: vec![
+                        ("file", path.display().to_string()),
+                        ("do", crate::secure_file::FIX_NO_ACLS.to_owned()),
+                    ],
+                });
+            }
+            env_lib::Env::from_text(&text)
+        }
         _ => Ok(env_lib::Env::new()),
     };
     let env = env.and_then(|env| env.with_prefix(&prefix)).map_err(|e| {
@@ -1134,14 +1157,27 @@ fn report_configuration(
                 "the config member is disabled; defaults".to_owned(),
             )],
         )],
-        Source::File(path) => vec![line(
-            false,
-            "configuration",
-            vec![
-                ("source", origin.describe().to_owned()),
-                ("file", path.display().to_string()),
-            ],
-        )],
+        Source::File(path) => {
+            let mut lines = vec![line(
+                false,
+                "configuration",
+                vec![
+                    ("source", origin.describe().to_owned()),
+                    ("file", path.display().to_string()),
+                ],
+            )];
+            if crate::secure_file::on_volume_without_acls(path) {
+                lines.push(line(
+                    true,
+                    "the configuration file is on a drive that keeps no access control lists (FAT or exFAT); any account can change it",
+                    vec![
+                        ("file", path.display().to_string()),
+                        ("do", crate::secure_file::FIX_NO_ACLS.to_owned()),
+                    ],
+                ));
+            }
+            lines
+        }
         Source::Text(_) => vec![line(
             false,
             "configuration",
@@ -1353,6 +1389,17 @@ fn step_secrets(parts: &mut Parts) -> Result<(), Error> {
                 config.version(),
             )?;
             state.accept(table);
+            for (key, file) in crate::secrets::files_without_acls(&config) {
+                parts.early_lines.push(EarlyLine {
+                    warn: true,
+                    message: "a secret file is on a drive that keeps no access control lists (FAT or exFAT); any account can read or change it",
+                    fields: vec![
+                        ("key", key),
+                        ("file", file.display().to_string()),
+                        ("do", crate::secure_file::FIX_NO_ACLS.to_owned()),
+                    ],
+                });
+            }
         }
     }
     parts.secrets = Some(state);
@@ -1527,9 +1574,37 @@ fn first_lines(parts: &Parts) {
         }
         if let Some(guard) = &parts.guard {
             for warning in &guard.report().warnings {
-                parts
-                    .log
-                    .warn("guard", &[("warning", Val::Str(&format!("{warning:?}")))]);
+                match warning {
+                    // The application's own call, single_instance(false), is
+                    // a choice made in code: reported once at info. Turned
+                    // off by the configuration file or the environment
+                    // (guard.lock = false), it stays a warning: another copy
+                    // can start against the same files (D-106).
+                    sys_lib::process::GuardWarning::LockDisabled => {
+                        if parts.settings.single_instance == Some(false) {
+                            parts.log.info(
+                                "the single-instance lock is off",
+                                &[("set_by", Val::Str("the application"))],
+                            );
+                        } else {
+                            parts.log.warn(
+                                "the single-instance lock is off; another copy can start against the same files",
+                                &[
+                                    ("set_by", Val::Str("the configuration (guard.lock = false)")),
+                                    (
+                                        "do",
+                                        Val::Str(
+                                            "remove guard.lock = false unless several copies are meant to run",
+                                        ),
+                                    ),
+                                ],
+                            );
+                        }
+                    }
+                    other => parts
+                        .log
+                        .warn("guard", &[("warning", Val::Str(&format!("{other:?}")))]),
+                }
             }
         }
     }

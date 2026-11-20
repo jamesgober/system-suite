@@ -37,7 +37,7 @@ Durations are an integer number of seconds or a string with a unit: `"500ms"`, `
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `lock` | bool | `true` | take the single-instance lock (`Builder::single_instance` wins) |
+| `lock` | bool | `true` | take the single-instance lock (`Builder::single_instance` wins); `false` here is logged at warn, `single_instance(false)` in code at info |
 | `lock_dir` | path | the runtime directory | where the lock file lives |
 | `allow_network_lock` | bool | `false` | accept a lock directory on a network filesystem |
 | `umask` | octal string | `"0027"` | the process umask (process-wide mode only) |

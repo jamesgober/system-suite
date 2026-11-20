@@ -342,6 +342,26 @@ impl State {
 }
 
 /// `("env", "NAME")` for `"env:NAME"`, and so on.
+/// The `file:` secret references of `config` whose file is on a drive
+/// without access control lists (FAT, exFAT): accepted, since no check
+/// can protect them, and reported at WARN by the caller (D-106). Empty
+/// without a walk on systems other than Windows.
+pub(crate) fn files_without_acls(config: &Config) -> Vec<(String, std::path::PathBuf)> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    collect(config.backend().as_value(), &mut Vec::new(), &mut found);
+    found
+        .into_iter()
+        .filter_map(|(path, text)| match reference(&text) {
+            Some(("file", file)) => Some((path, std::path::PathBuf::from(file))),
+            _ => None,
+        })
+        .filter(|(_, file)| crate::secure_file::on_volume_without_acls(file))
+        .collect()
+}
+
 fn reference(text: &str) -> Option<(&'static str, &str)> {
     ["env", "file", "vault"].into_iter().find_map(|kind| {
         text.strip_prefix(kind)
@@ -431,8 +451,18 @@ fn from_file(path: &str, file: &Path) -> Result<RawKey, Error> {
             "point it at a regular file that holds the secret",
         ));
     }
-    use crate::secure_file::{FIX_SECRET, Others, Refusal, open_trusted};
+    use crate::secure_file::{
+        FIX_NO_ACLS, FIX_SECRET, Others, Refusal, on_volume_without_acls, open_trusted,
+    };
     let opened = open_trusted(file, Others::NoAccess).map_err(|refusal| match refusal {
+        Refusal::Refused(_) if on_volume_without_acls(file) => secret_error(
+            path,
+            &format!(
+                "names the file {}, which is refused: its drive keeps no access control lists (FAT or exFAT), so any account can read it",
+                file.display()
+            ),
+            FIX_NO_ACLS,
+        ),
         Refusal::Refused(reason) => secret_error(
             path,
             &format!(

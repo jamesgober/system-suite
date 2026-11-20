@@ -143,7 +143,20 @@ impl Reloader {
         // configuration in force reads does not change.
         #[cfg(feature = "secrets")]
         let staged = match &self.secrets {
-            Some(state) => Some(state.stage(&config, new_sections.secrets.allow_plain, version)?),
+            Some(state) => {
+                let table = state.stage(&config, new_sections.secrets.allow_plain, version)?;
+                for (key, file) in crate::secrets::files_without_acls(&config) {
+                    self.log.warn(
+                        "a secret file is on a drive that keeps no access control lists (FAT or exFAT); any account can read or change it",
+                        &[
+                            ("key", Val::Str(&key)),
+                            ("file", Val::Str(&file.display().to_string())),
+                            ("do", Val::Str(crate::secure_file::FIX_NO_ACLS)),
+                        ],
+                    );
+                }
+                Some(table)
+            }
             None => {
                 // The secrets member is disabled: a reference is refused,
                 // as at boot, so it is never read as a literal (D-100).

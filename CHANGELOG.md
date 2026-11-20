@@ -11,6 +11,19 @@
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-20
+
+Two log and error messages from WASP's gateway on Windows (D-106).
+
+### Changed
+
+- The guard's `LockDisabled` warning came on every boot, even when the application turned the lock off itself with `single_instance(false)`. That choice is now one info line, "the single-instance lock is off", with `set_by` "the application". The lock turned off by the configuration (`guard.lock = false`, from the file or the environment) is still a warning, which now says another copy can start against the same files and what to do.
+
+### Fixed
+
+- On Windows, an application directory (logs, runtime) on a drive without access control lists (FAT, exFAT) was refused with the advice to fix its owner and permissions or delete it, neither of which helps on such a drive. The error now names the drive type and says to move the directories to an NTFS drive or use a portable install, which accepts such a drive. A configuration, `.env`, or secret file refused there gets the same plain message.
+- A configuration, `.env`, or `file:` secret file on such a drive is still accepted (D-098), but no longer silently: the boot logs a warning naming the file and saying to move it to an NTFS drive, and a reload does the same for a secret file.
+
 ## [0.9.3] - 2026-11-19
 
 Two fixes from a macOS test of WASP's gateway (D-105).
@@ -564,7 +577,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/jamesgober/system-suite/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/jamesgober/system-suite/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/system-suite/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/jamesgober/system-suite/compare/v0.9.0...v0.9.1
