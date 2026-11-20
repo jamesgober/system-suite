@@ -230,6 +230,7 @@ impl Subsystem for Broken {
     }
 }
 
+#[cfg(feature = "log")]
 /// The last "stopped" line of `name`'s log under `root`.
 fn last_stopped_line(root: &Root, name: &str) -> String {
     let log = fs::read_to_string(root.path().join("logs").join(format!("{name}.log")))
@@ -240,6 +241,7 @@ fn last_stopped_line(root: &Root, name: &str) -> String {
         .to_owned()
 }
 
+#[cfg(feature = "log")]
 #[test]
 fn test_a_dropped_boot_logs_the_exit_code_it_knows() {
     // D-105: after a failed start the line names that error's exit code
@@ -264,6 +266,7 @@ fn test_a_dropped_boot_logs_the_exit_code_it_knows() {
     assert!(line.contains("set by the application"), "{line}");
 }
 
+#[cfg(feature = "log")]
 #[test]
 fn test_a_dropped_system_logs_the_exit_code_it_knows() {
     // D-105: a System dropped without run or shutdown, as when main returns
