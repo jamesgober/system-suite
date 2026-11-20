@@ -1,7 +1,7 @@
 <h1 align="center">
     <img width="99" alt="Rust logo" src="https://raw.githubusercontent.com/jamesgober/rust-collection/72baabd71f00e14aa9184efcb16fa3deddda3a0a/assets/rust-logo.svg">
     <br><b>system-suite</b><br>
-    <sub><sup>API REFERENCE &middot; v0.9.4</sup></sub>
+    <sub><sup>API REFERENCE &middot; v0.9.5</sup></sub>
 </h1>
 <div align="center">
     <sup>
@@ -68,7 +68,7 @@ crate still builds. No feature brings an async runtime.
 | `sys` | yes | sys-lib 0.5 | build info, instance info, process guard | none |
 | `paths` | yes | path-lib 1.3 | application and OS directories, owner-only where the suite writes, existing ones checked before use; file access checks on Windows | none |
 | `env` | yes | env-lib 1.1 (implies `paths`) | `.env` file and variables | none |
-| `config` | yes | config-lib 1.4, `conf` format (implies `paths`) | one configuration file, reload | thiserror, dashmap, arc-swap (through config-lib) |
+| `config` | yes | config-lib 1.5, `conf` format (implies `paths`) | one configuration file, reload | thiserror, dashmap, arc-swap (through config-lib) |
 | `log` | yes | log-io 2.2 | structured logging, the crash report's recent lines | none |
 | `metrics` | yes | metrics-lib 2.2 (counters, gauges, timers) | the system's registry and the kernel's own metrics | none |
 | `signals` | yes | signal-mod 2.2.1, runtime-free back-end (implies `kernel`) | stop, reload, dump signals; Windows service control | libc and signal-hook (Unix), windows-sys (Windows) |

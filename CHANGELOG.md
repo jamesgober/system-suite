@@ -11,6 +11,22 @@
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-11-20
+
+Empty sections and lists of tables in `.conf` files, through config-lib 1.5 (D-107).
+
+### Added
+
+- A `.conf` file can hold lists of tables (`[[upstream]]`), read with TOML's rules: the keys after the header go into a new item, and a `[upstream.tls]` header after it belongs to the last item. The header used to fail on its first line. A list reaches the application through `Config::backend()`. A suite section written as a list (`[[log]]`) is refused, like any other value in its place. A list item cannot hold a secret yet, neither a reference nor a plain value under a secret-marked key, since a secret is named by its path and a list item has none (recorded in `dev/ROADMAP.md`).
+
+### Fixed
+
+- A section with no keys in a `.conf` file (`[auth.passwrd]`, `[content.fields.post.author]`) vanished, so `Config::keys` of its parent never listed it: a misspelled empty section went unnoticed by a key check, and an intentionally empty one never reached the application. It is now an empty table, as TOML and NOML already did. An empty sub-section of one of the suite's own sections (`[log.levle]`) is refused as an unknown key, like any other.
+
+### Dependencies
+
+- config-lib 1.5 is required (was 1.4).
+
 ## [0.9.4] - 2026-11-20
 
 Two log and error messages from WASP's gateway on Windows (D-106).
@@ -577,7 +593,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/jamesgober/system-suite/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/jamesgober/system-suite/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/jamesgober/system-suite/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/system-suite/compare/v0.9.1...v0.9.2

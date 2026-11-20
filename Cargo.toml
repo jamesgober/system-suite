@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "system-suite"
-version = "0.9.4"
+version = "0.9.5"
 
 # Minimum Supported Rust Version (MSRV)
 # 1.89: the highest MSRV among the members (sys-lib needs `File::lock` and
@@ -176,7 +176,7 @@ env-lib = { version = "1.1", optional = true }
 # Configuration in the `conf` format. First-party; brings thiserror, serde,
 # dashmap, and arc-swap (reviewed and accepted, dev/PLAN.md section 12.4).
 # Default features off: `hot-reload` brings `notify` (not accepted).
-config-lib = { version = "1.4", optional = true, default-features = false, features = ["conf"] }
+config-lib = { version = "1.5", optional = true, default-features = false, features = ["conf"] }
 
 # Structured logging; 2.1 for the recent-lines ring (crash reports) and
 # file modes. First-party; no dependencies with these features.

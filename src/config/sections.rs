@@ -370,6 +370,10 @@ mod tests {
             "[kernel]\nmemory_shed = 100\n",
             "[ids]\nepoch = 99999999999999\n",
             "log = 3\n",
+            // An empty section is a key of its parent (D-107).
+            "[log.levle]\n",
+            // A suite section written as a list of tables (D-107).
+            "[[log]]\nlevel = \"info\"\n",
         ] {
             let error = sections(text).err();
             assert_eq!(
