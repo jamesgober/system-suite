@@ -167,6 +167,12 @@ pub(crate) fn find(search: &Search<'_>) -> Result<(Source, Origin), Error> {
     Ok((Source::Defaults, Origin::NotFound))
 }
 
+/// The `<name>.<format>` file in the working directory, if exactly one is
+/// there: what a non-elevated process would have read (D-105).
+pub(crate) fn working_directory_file(name: &str) -> Option<PathBuf> {
+    single_in(Path::new("."), name).ok().flatten()
+}
+
 fn must_exist(path: &Path, named_by: &str) -> Result<PathBuf, Error> {
     if path.is_file() {
         Ok(path.to_path_buf())

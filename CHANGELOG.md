@@ -11,6 +11,15 @@
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-19
+
+Two fixes from a macOS test of WASP's gateway (D-105).
+
+### Fixed
+
+- The configuration step's report never reached the log (it ran before logging starts), and a configuration file in the working directory that was skipped, or a boot on the defaults, said nothing. Once logging starts the suite now writes the file in use at info, with its path, and at warn a skipped `./<name>.conf` with the file and the reason (the process is elevated, or its elevation is unknown because the `sys` feature is off), and a boot on the defaults with the directory it searched. The rule is unchanged: a process whose elevation is unknown does not read the working directory.
+- A staged `Boot` dropped after a failed `start` logged `stopped exit_code=0` while the process exited 70, and so did a `System` or `Boot` dropped when `main` returned early with its own code. The line now names the failed start's code, or the stop's code after a stop request, and otherwise logs `exit_code` "set by the application", since the suite cannot see what `main` returns.
+
 ## [0.9.2] - 2026-11-12
 
 Every file the suite trusts is opened through path-lib's checked open (D-104).
@@ -555,7 +564,8 @@ The scaffold and the plan. No functional code yet.
   decisions, decision log D-001 to D-007), `dev/DIRECTIVES.md`, and
   `dev/ROADMAP.md`.
 
-[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/jamesgober/system-suite/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/jamesgober/system-suite/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/system-suite/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/jamesgober/system-suite/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/jamesgober/system-suite/compare/v0.8.1...v0.9.0

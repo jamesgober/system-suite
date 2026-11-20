@@ -46,6 +46,14 @@ const SUBSYSTEM_GRACE: Duration = Duration::from_millis(100);
 pub(crate) type StepFn = fn(&mut Parts) -> Result<(), Error>;
 
 /// Everything started so far. The teardown stops it in reverse.
+/// A log line from a step that runs before logging starts.
+#[cfg_attr(not(feature = "log"), allow(dead_code))]
+pub(crate) struct EarlyLine {
+    pub(crate) warn: bool,
+    pub(crate) message: &'static str,
+    pub(crate) fields: Vec<(&'static str, String)>,
+}
+
 pub(crate) struct Parts {
     pub(crate) settings: Settings,
     pub(crate) sections: Sections,
@@ -87,6 +95,15 @@ pub(crate) struct Parts {
     notified_ready: bool,
     #[cfg(feature = "globals")]
     pub(crate) published: bool,
+    /// The application decides the exit code (a `Boot` dropped before
+    /// `ready` without a failure): the last log line says so instead of
+    /// naming one (D-105).
+    #[cfg_attr(not(feature = "log"), allow(dead_code))]
+    pub(crate) exit_set_by_app: bool,
+    /// Lines from the steps before logging starts (step 10), written with
+    /// the first lines (D-105).
+    #[cfg_attr(not(feature = "log"), allow(dead_code))]
+    pub(crate) early_lines: Vec<EarlyLine>,
 }
 
 impl Parts {
@@ -97,6 +114,8 @@ impl Parts {
             log: LogSlot::default(),
             began: Instant::now(),
             timeline: Vec::with_capacity(17),
+            exit_set_by_app: false,
+            early_lines: Vec::new(),
             #[cfg(feature = "kernel")]
             kernel: Kernel::new(),
             #[cfg(feature = "sys")]
@@ -459,13 +478,24 @@ impl Parts {
         let Some(logger) = self.logger.take() else {
             return code;
         };
-        self.log.info(
-            "stopped",
-            &[
-                ("exit_code", Val::U64(u64::from(code))),
-                ("uptime_ms", Val::U64(millis(self.began.elapsed()))),
-            ],
-        );
+        let uptime = Val::U64(millis(self.began.elapsed()));
+        if self.exit_set_by_app {
+            self.log.info(
+                "stopped",
+                &[
+                    ("exit_code", Val::Str("set by the application")),
+                    ("uptime_ms", uptime),
+                ],
+            );
+        } else {
+            self.log.info(
+                "stopped",
+                &[
+                    ("exit_code", Val::U64(u64::from(code))),
+                    ("uptime_ms", uptime),
+                ],
+            );
+        }
         let outcome = run_with_deadline("logging", deadline.max(Instant::now()), move || {
             // Errors here can no longer be logged; the exit code reports a
             // missed deadline, and the sinks report their own write errors.
@@ -1057,11 +1087,115 @@ fn step_configuration(parts: &mut Parts) -> Result<(), Error> {
     }
     parts.sections = sections;
     parts.config = Some(crate::Snapshot::new(config));
+    let skipped = if disabled || elevated == Some(false) || !matches!(source, Source::Defaults) {
+        None
+    } else {
+        load::working_directory_file(&parts.settings.name)
+    };
+    report_configuration(
+        parts,
+        &source,
+        origin,
+        disabled,
+        elevated,
+        config_dir.as_deref(),
+        skipped,
+    );
     parts.config_source = Some(source);
-    parts
-        .log
-        .info("configuration", &[("source", Val::Str(origin.describe()))]);
     Ok(())
+}
+
+/// The configuration step's lines, written once logging starts (D-105):
+/// the file in use at info; at warn, a working-directory file that was
+/// skipped and why, and a boot on the defaults with where it looked.
+#[cfg(feature = "config")]
+fn report_configuration(
+    parts: &mut Parts,
+    source: &crate::config::load::Source,
+    origin: crate::config::load::Origin,
+    disabled: bool,
+    elevated: Option<bool>,
+    config_dir: Option<&std::path::Path>,
+    skipped: Option<std::path::PathBuf>,
+) {
+    use crate::config::load::Source;
+
+    let line = |warn, message, fields| EarlyLine {
+        warn,
+        message,
+        fields,
+    };
+    let early = match source {
+        _ if disabled => vec![line(
+            false,
+            "configuration",
+            vec![(
+                "source",
+                "the config member is disabled; defaults".to_owned(),
+            )],
+        )],
+        Source::File(path) => vec![line(
+            false,
+            "configuration",
+            vec![
+                ("source", origin.describe().to_owned()),
+                ("file", path.display().to_string()),
+            ],
+        )],
+        Source::Text(_) => vec![line(
+            false,
+            "configuration",
+            vec![("source", origin.describe().to_owned())],
+        )],
+        Source::Defaults => {
+            let mut lines = Vec::new();
+            let cwd_reason = match elevated {
+                Some(false) => None,
+                Some(true) => Some(
+                    "the process is elevated, and another user can influence a working directory",
+                ),
+                None => Some(
+                    "the process's elevation is unknown (the `sys` feature is off, or the OS did not report it), so it is treated as elevated",
+                ),
+            };
+            if let Some(reason) = cwd_reason
+                && let Some(skipped) = &skipped
+            {
+                lines.push(line(
+                    true,
+                    "a configuration file in the working directory was skipped",
+                    vec![
+                        ("file", skipped.display().to_string()),
+                        ("reason", reason.to_owned()),
+                        (
+                            "do",
+                            "name the file with <NAME>_CONFIG or Builder::config_file, or turn on the suite's `sys` feature".to_owned(),
+                        ),
+                    ],
+                ));
+            }
+            lines.push(line(
+                true,
+                "no configuration file found; every setting has its default",
+                vec![
+                    (
+                        "config_dir",
+                        config_dir
+                            .map_or_else(|| "none".to_owned(), |dir| dir.display().to_string()),
+                    ),
+                    (
+                        "working_directory",
+                        match cwd_reason {
+                            None => "searched".to_owned(),
+                            Some(_) => "not searched".to_owned(),
+                        },
+                    ),
+                ],
+            ));
+            lines
+        }
+    };
+    parts.early_lines.extend(early);
 }
 
 /// Step 6: the single-instance lock, the umask, and the open-file limit.
@@ -1414,6 +1548,18 @@ fn first_lines(parts: &Parts) {
             );
         }
     }
+    for line in &parts.early_lines {
+        let fields: Vec<(&str, Val<'_>)> = line
+            .fields
+            .iter()
+            .map(|(key, value)| (*key, Val::Str(value)))
+            .collect();
+        if line.warn {
+            parts.log.warn(line.message, &fields);
+        } else {
+            parts.log.info(line.message, &fields);
+        }
+    }
     parts.log_timeline();
 }
 
@@ -1695,6 +1841,73 @@ mod tests {
 
     fn fail(_parts: &mut Parts) -> Result<(), Error> {
         Err(Error::new(ErrorKind::Io, "injected", "nothing"))
+    }
+
+    #[cfg(feature = "config")]
+    #[test]
+    fn test_a_skipped_working_directory_file_and_the_defaults_are_warned() {
+        // D-105: with the elevation unknown, a `<name>.conf` in the working
+        // directory is skipped (fail closed), and both the skip and the boot
+        // on defaults are logged at warn, with the file and the reason.
+        use crate::config::load::{Origin, Source};
+
+        let mut skipping = parts();
+        report_configuration(
+            &mut skipping,
+            &Source::Defaults,
+            Origin::NotFound,
+            false,
+            None,
+            Some(std::path::Path::new("/etc/app")),
+            Some(std::path::PathBuf::from("./boot-test.conf")),
+        );
+        let lines: Vec<(bool, &str, String)> = skipping
+            .early_lines
+            .iter()
+            .map(|l| {
+                let fields: Vec<String> =
+                    l.fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                (l.warn, l.message, fields.join(" "))
+            })
+            .collect();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].0 && lines[0].1.contains("working directory was skipped"));
+        assert!(
+            lines[0].2.contains("file=./boot-test.conf"),
+            "{}",
+            lines[0].2
+        );
+        assert!(
+            lines[0].2.contains("elevation is unknown"),
+            "{}",
+            lines[0].2
+        );
+        assert!(lines[1].0 && lines[1].1.contains("every setting has its default"));
+        assert!(
+            lines[1].2.contains("working_directory=not searched"),
+            "{}",
+            lines[1].2
+        );
+
+        // The file in use is named at info, and nothing is warned.
+        let mut using = parts();
+        report_configuration(
+            &mut using,
+            &Source::File(std::path::PathBuf::from("/etc/app/app.conf")),
+            Origin::ConfigDirectory,
+            false,
+            Some(false),
+            None,
+            None,
+        );
+        assert_eq!(using.early_lines.len(), 1);
+        assert!(!using.early_lines[0].warn);
+        assert!(
+            using.early_lines[0]
+                .fields
+                .iter()
+                .any(|(k, v)| *k == "file" && v == "/etc/app/app.conf")
+        );
     }
 
     #[test]

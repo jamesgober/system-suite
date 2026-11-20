@@ -160,7 +160,6 @@ impl Error {
     }
 
     /// The process exit code for this error's kind (see [`exit`]).
-    #[must_use]
     pub fn exit_code(&self) -> ExitCode {
         ExitCode::from(self.0.kind.exit_value())
     }

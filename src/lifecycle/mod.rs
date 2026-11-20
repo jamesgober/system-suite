@@ -120,7 +120,6 @@ pub enum StopReason {
 impl StopReason {
     /// The exit code a stop for this reason ends with: success, except
     /// `WorkerFailed`, which is `70` (`exit::SOFTWARE`).
-    #[must_use]
     pub fn exit_code(&self) -> std::process::ExitCode {
         std::process::ExitCode::from(self.exit_value())
     }

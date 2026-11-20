@@ -70,6 +70,9 @@ pub struct Boot {
     foundation: Foundation,
     registered: Vec<Box<dyn Subsystem>>,
     on_ready: Vec<OnReady>,
+    /// The exit code of the last `start` that failed, for the last log
+    /// line when the `Boot` is then dropped (D-105).
+    failed: Option<u8>,
 }
 
 impl Boot {
@@ -84,6 +87,7 @@ impl Boot {
             foundation,
             registered,
             on_ready,
+            failed: None,
         }
     }
 
@@ -104,7 +108,13 @@ impl Boot {
     /// requested. On error the subsystem is not added and the `Boot` is
     /// still usable.
     pub fn start(&mut self, subsystem: impl Subsystem) -> Result<(), Error> {
-        self.start_boxed(Box::new(subsystem))
+        let started = self.start_boxed(Box::new(subsystem));
+        if let Err(error) = &started
+            && error.kind() != ErrorKind::Interrupted
+        {
+            self.failed = Some(error.kind().exit_value());
+        }
+        started
     }
 
     fn start_boxed(&mut self, mut subsystem: Box<dyn Subsystem>) -> Result<(), Error> {
@@ -227,9 +237,25 @@ impl Boot {
 }
 
 impl Drop for Boot {
+    /// Stops everything started, in reverse. The last log line names the
+    /// exit code of a failed `start`, 0 after a stop request, and
+    /// otherwise says that the application sets it: the `Boot` cannot see
+    /// what `main` returns (D-105).
     fn drop(&mut self) {
         if let Some(mut parts) = self.parts.take() {
-            let _code = parts.teardown(crate::exit::OK, "the Boot was dropped");
+            let stopped = self.foundation.kernel().stop_reason().is_some();
+            let (code, cause) = match self.failed {
+                Some(code) => (
+                    code,
+                    "the Boot was dropped after a subsystem failed to start",
+                ),
+                None if stopped => (crate::exit::OK, "the Boot was dropped after a stop request"),
+                None => {
+                    parts.exit_set_by_app = true;
+                    (crate::exit::OK, "the Boot was dropped before ready")
+                }
+            };
+            let _code = parts.teardown(code, cause);
         }
     }
 }
