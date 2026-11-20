@@ -475,12 +475,27 @@ impl System {
 }
 
 impl Drop for System {
+    /// Stops everything without `run` or `shutdown`: after a stop request
+    /// the last log line names the stop's exit code; otherwise it says the
+    /// application sets it, since the system cannot see what `main`
+    /// returns (D-105).
     fn drop(&mut self) {
         if !self.finished {
             self.finished = true;
-            let _code = self
-                .parts
-                .teardown(crate::exit::OK, "the System was dropped");
+            #[cfg(feature = "kernel")]
+            let code = match self.foundation.kernel().stop_reason() {
+                Some(reason) => reason.exit_value(),
+                None => {
+                    self.parts.exit_set_by_app = true;
+                    crate::exit::OK
+                }
+            };
+            #[cfg(not(feature = "kernel"))]
+            let code = {
+                self.parts.exit_set_by_app = true;
+                crate::exit::OK
+            };
+            let _code = self.parts.teardown(code, "the System was dropped");
         }
     }
 }

@@ -72,9 +72,7 @@ paths = ["dep:path-lib"]
 env = ["paths", "dep:env-lib"]
 
 # Configuration (config-lib, `conf` format; dev/PLAN.md, D-034).
-# `sys` for the elevation check that decides whether a file in the working
-# directory may be read (D-105).
-config = ["paths", "sys", "dep:config-lib"]
+config = ["paths", "dep:config-lib"]
 
 # Structured logging (log-io).
 log = ["dep:log-io"]

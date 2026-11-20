@@ -17,9 +17,8 @@ Two fixes from a macOS test of WASP's gateway (D-105).
 
 ### Fixed
 
-- Without the `sys` feature, a configuration file in the working directory (`./<name>.conf`) was skipped without a word: the process's elevation was unknown, and the lookup treats an unknown elevation as elevated. The `config` feature now turns `sys` on, so the check runs; if the OS refuses to report the elevation, the file is still skipped, now with a warning in the first log lines.
-- A `Boot` dropped after a failed `start` logged `stopped exit_code=0` while the process exited 70. The line now names the failed start's exit code; after a stop request it is 0, and a `Boot` dropped before `ready` for the application's own reasons logs `exit_code` "set by the application", since the suite cannot see what `main` returns.
-
+- The configuration step's report never reached the log (it ran before logging starts), and a configuration file in the working directory that was skipped, or a boot on the defaults, said nothing. Once logging starts the suite now writes the file in use at info, with its path, and at warn a skipped `./<name>.conf` with the file and the reason (the process is elevated, or its elevation is unknown because the `sys` feature is off), and a boot on the defaults with the directory it searched. The rule is unchanged: a process whose elevation is unknown does not read the working directory.
+- A staged `Boot` dropped after a failed `start` logged `stopped exit_code=0` while the process exited 70, and so did a `System` or `Boot` dropped when `main` returned early with its own code. The line now names the failed start's code, or the stop's code after a stop request, and otherwise logs `exit_code` "set by the application", since the suite cannot see what `main` returns.
 
 ## [0.9.2] - 2026-11-12
 

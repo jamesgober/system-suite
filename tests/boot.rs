@@ -1060,9 +1060,9 @@ fn test_t4_a_planted_env_file_cannot_redirect_the_configuration_on_windows() {
 #[cfg(unix)]
 #[test]
 fn test_t4_a_working_directory_file_is_read_when_not_elevated() {
-    // D-105: `config` turns `sys` on, so the elevation is known and a
-    // `<name>.conf` in the working directory is read by a process that is
-    // not elevated (it was skipped without a word with `sys` off).
+    // D-105: with `sys` the elevation is known, and a `<name>.conf` in the
+    // working directory is read by a process that is not elevated, and
+    // named in the log.
     if system_suite::sys::process::is_elevated().unwrap_or(true) {
         return; // root (a container): the file is skipped by design
     }
