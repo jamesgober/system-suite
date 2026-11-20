@@ -230,6 +230,41 @@ impl Subsystem for Broken {
     }
 }
 
+/// The last "stopped" line of `name`'s log under `root`.
+fn last_stopped_line(root: &Root, name: &str) -> String {
+    let log = fs::read_to_string(root.path().join("logs").join(format!("{name}.log")))
+        .unwrap_or_default();
+    log.lines()
+        .filter(|line| line.contains("\"stopped\""))
+        .last()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn test_a_dropped_boot_logs_the_exit_code_it_knows() {
+    // D-105: after a failed start the line names that error's exit code
+    // (70 for a subsystem), not 0; dropped for the application's own
+    // reasons, it says the application sets the code.
+    let root = Root::new("dropexit");
+    let builder = || {
+        System::builder("kernel-dropexit")
+            .process_wide(false)
+            .single_instance(false)
+            .portable(root.path())
+    };
+    let mut boot = builder().boot().unwrap();
+    assert!(boot.start(Broken { panic: false }).is_err());
+    drop(boot);
+    let line = last_stopped_line(&root, "kernel-dropexit");
+    assert!(line.contains("\"exit_code\":70"), "{line}");
+
+    let boot = builder().boot().unwrap();
+    drop(boot);
+    let line = last_stopped_line(&root, "kernel-dropexit");
+    assert!(line.contains("set by the application"), "{line}");
+}
+
 #[test]
 fn test_a_failing_subsystem_unwinds_the_ones_started_before_it() {
     for panic in [false, true] {

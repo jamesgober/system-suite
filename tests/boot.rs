@@ -48,6 +48,7 @@ fn child() {
     let code = match scenario.as_str() {
         "serve" => serve(&root),
         "boot" => boot_only(&root),
+        "cwd-config" => cwd_config(&root),
         "env-file-missing" => env_file_missing(&root),
         "panic" => panic_after_boot(&root),
         "reload-watch" => reload_watch(&root),
@@ -91,6 +92,19 @@ fn boot_only(_root: &Path) -> u8 {
     match System::builder(&name()).start() {
         Ok(system) => {
             println!("READY");
+            let _code = system.shutdown();
+            0
+        }
+        Err(error) => report(&error),
+    }
+}
+
+/// Boots and prints `app.limit`, for the working-directory lookup.
+fn cwd_config(_root: &Path) -> u8 {
+    match System::builder(&name()).start() {
+        Ok(system) => {
+            let limit: Option<i64> = system.config().get("app.limit").ok().flatten();
+            println!("LIMIT {}", limit.unwrap_or(0));
             let _code = system.shutdown();
             0
         }
@@ -1041,6 +1055,32 @@ fn test_t4_a_planted_env_file_cannot_redirect_the_configuration_on_windows() {
     let stderr = text(&output.stderr);
     assert!(stderr.contains("other accounts can change it"), "{stderr}");
     assert!(!stderr.contains("planted.conf"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_t4_a_working_directory_file_is_read_when_not_elevated() {
+    // D-105: `config` turns `sys` on, so the elevation is known and a
+    // `<name>.conf` in the working directory is read by a process that is
+    // not elevated (it was skipped without a word with `sys` off).
+    if system_suite::sys::process::is_elevated().unwrap_or(true) {
+        return; // root (a container): the file is skipped by design
+    }
+    let scenario = Scenario::new("it-cwd");
+    let work = scenario.root.join("work");
+    fs::create_dir_all(&work).unwrap();
+    write_private(&work.join("it-cwd.conf"), "[app]\nlimit = 9\n");
+    let output = scenario
+        .command("cwd-config")
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    assert!(
+        text(&output.stdout).contains("LIMIT 9"),
+        "{}{}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
 }
 
 #[test]

@@ -87,6 +87,15 @@ pub(crate) struct Parts {
     notified_ready: bool,
     #[cfg(feature = "globals")]
     pub(crate) published: bool,
+    /// The application decides the exit code (a `Boot` dropped before
+    /// `ready` without a failure): the last log line says so instead of
+    /// naming one (D-105).
+    #[cfg_attr(not(feature = "log"), allow(dead_code))]
+    pub(crate) exit_set_by_app: bool,
+    /// Warnings found before logging starts (step 10), written with the
+    /// first lines.
+    #[cfg_attr(not(feature = "log"), allow(dead_code))]
+    pub(crate) early_warnings: Vec<&'static str>,
 }
 
 impl Parts {
@@ -97,6 +106,8 @@ impl Parts {
             log: LogSlot::default(),
             began: Instant::now(),
             timeline: Vec::with_capacity(17),
+            exit_set_by_app: false,
+            early_warnings: Vec::new(),
             #[cfg(feature = "kernel")]
             kernel: Kernel::new(),
             #[cfg(feature = "sys")]
@@ -459,13 +470,24 @@ impl Parts {
         let Some(logger) = self.logger.take() else {
             return code;
         };
-        self.log.info(
-            "stopped",
-            &[
-                ("exit_code", Val::U64(u64::from(code))),
-                ("uptime_ms", Val::U64(millis(self.began.elapsed()))),
-            ],
-        );
+        let uptime = Val::U64(millis(self.began.elapsed()));
+        if self.exit_set_by_app {
+            self.log.info(
+                "stopped",
+                &[
+                    ("exit_code", Val::Str("set by the application")),
+                    ("uptime_ms", uptime),
+                ],
+            );
+        } else {
+            self.log.info(
+                "stopped",
+                &[
+                    ("exit_code", Val::U64(u64::from(code))),
+                    ("uptime_ms", uptime),
+                ],
+            );
+        }
         let outcome = run_with_deadline("logging", deadline.max(Instant::now()), move || {
             // Errors here can no longer be logged; the exit code reports a
             // missed deadline, and the sinks report their own write errors.
@@ -998,10 +1020,15 @@ fn step_configuration(parts: &mut Parts) -> Result<(), Error> {
     };
     #[cfg(not(feature = "env"))]
     let env_file_value = None;
-    #[cfg(feature = "sys")]
+    // `config` turns `sys` on, so the elevation is known unless the OS
+    // refuses to say; then a working-directory file is skipped, with a
+    // warning (D-105).
     let elevated = sys_lib::process::is_elevated().ok();
-    #[cfg(not(feature = "sys"))]
-    let elevated = None;
+    if elevated.is_none() {
+        parts.early_warnings.push(
+            "the process's elevation could not be read, so a configuration file in the working directory is not read; name the file with <NAME>_CONFIG or Builder::config_file",
+        );
+    }
     let config_dir = parts
         .app
         .as_ref()
@@ -1413,6 +1440,9 @@ fn first_lines(parts: &Parts) {
                 ],
             );
         }
+    }
+    for warning in &parts.early_warnings {
+        parts.log.warn(warning, &[]);
     }
     parts.log_timeline();
 }
